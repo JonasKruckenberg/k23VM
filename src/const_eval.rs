@@ -22,33 +22,33 @@ impl ConstExprEvaluator {
                 ConstOp::RefNull => todo!(),
                 ConstOp::RefFunc(_) => todo!(),
                 ConstOp::I32Add => {
-                        let (arg1, arg2) = self.pop2();
-                    
-                        self.push(VMVal::i32(arg1.get_i32().wrapping_add(arg2.get_i32())));
-                    }
-                ConstOp::I32Sub => {
-                        let (arg1, arg2) = self.pop2();
-                    
-                        self.push(VMVal::i32(arg1.get_i32().wrapping_sub(arg2.get_i32())));
-                    }
-                ConstOp::I32Mul => {
-                        let (arg1, arg2) = self.pop2();
-                    
-                        self.push(VMVal::i32(arg1.get_i32().wrapping_mul(arg2.get_i32())));
-                    }
-                ConstOp::I64Add =>{
-                        let (arg1, arg2) = self.pop2();
-                    
-                        self.push(VMVal::i64(arg1.get_i64().wrapping_add(arg2.get_i64())));
-                    }
-                ConstOp::I64Sub => {
-                        let (arg1, arg2) = self.pop2();
-                    
-                        self.push(VMVal::i64(arg1.get_i64().wrapping_sub(arg2.get_i64())));
-                    }
-                ConstOp::I64Mul =>  {
                     let (arg1, arg2) = self.pop2();
-                
+
+                    self.push(VMVal::i32(arg1.get_i32().wrapping_add(arg2.get_i32())));
+                }
+                ConstOp::I32Sub => {
+                    let (arg1, arg2) = self.pop2();
+
+                    self.push(VMVal::i32(arg1.get_i32().wrapping_sub(arg2.get_i32())));
+                }
+                ConstOp::I32Mul => {
+                    let (arg1, arg2) = self.pop2();
+
+                    self.push(VMVal::i32(arg1.get_i32().wrapping_mul(arg2.get_i32())));
+                }
+                ConstOp::I64Add => {
+                    let (arg1, arg2) = self.pop2();
+
+                    self.push(VMVal::i64(arg1.get_i64().wrapping_add(arg2.get_i64())));
+                }
+                ConstOp::I64Sub => {
+                    let (arg1, arg2) = self.pop2();
+
+                    self.push(VMVal::i64(arg1.get_i64().wrapping_sub(arg2.get_i64())));
+                }
+                ConstOp::I64Mul => {
+                    let (arg1, arg2) = self.pop2();
+
                     self.push(VMVal::i64(arg1.get_i64().wrapping_mul(arg2.get_i64())));
                 }
             }

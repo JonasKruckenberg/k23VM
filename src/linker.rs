@@ -10,7 +10,7 @@ pub struct Linker {}
 impl Linker {
     pub fn instantiate<'wasm>(
         &self,
-        store: &mut Store,
+        store: &mut Store<'wasm>,
         alloc: &dyn InstanceAllocator,
         module: &Module<'wasm>,
         const_eval: &mut ConstExprEvaluator,

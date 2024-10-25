@@ -1,5 +1,6 @@
 use crate::compile::{CompileJobs, CompiledModuleInfo, Compiler, ObjectBuilder};
 use crate::guest_memory::{CodeMemory, MmapVec};
+use crate::indices::EntityIndex;
 use crate::store::Store;
 use crate::translate::{Import, ModuleTranslator, TranslatedModule, Translation};
 use crate::vmcontext::VMContextPlan;
@@ -8,8 +9,11 @@ use alloc::sync::Arc;
 use tracing::log;
 use wasmparser::Validator;
 
+#[derive(Debug, Clone)]
+pub struct Module<'wasm>(pub(crate) Arc<ModuleInner<'wasm>>);
+
 #[derive(Debug)]
-pub struct Module<'wasm> {
+pub(crate) struct ModuleInner<'wasm> {
     pub info: Arc<CompiledModuleInfo<'wasm>>,
     pub code: Arc<CodeMemory>,
     pub vmctx_plan: VMContextPlan,
@@ -60,18 +64,31 @@ impl<'wasm> Module<'wasm> {
         let mut code = CodeMemory::new(code_buffer);
         code.publish();
 
-        Ok(Self {
+        Ok(Self(Arc::new(ModuleInner {
             vmctx_plan: VMContextPlan::for_module(compiler.target_isa(), &info.module),
             info: Arc::new(info),
             code: Arc::new(code),
-        })
+        })))
     }
 
-    pub(crate) fn module(&self) -> &TranslatedModule {
-        &self.info.module
+    pub(crate) fn module(&self) -> &TranslatedModule<'wasm> {
+        &self.0.info.module
+    }
+    pub(crate) fn vmctx_plan(&self) -> &VMContextPlan {
+        &self.0.vmctx_plan
     }
 
     pub fn imports(&self) -> impl ExactSizeIterator<Item = &Import<'wasm>> {
-        self.info.module.imports.iter()
+        self.module().imports.iter()
+    }
+    pub fn exports(&self) -> impl ExactSizeIterator<Item = (&'wasm str, EntityIndex)> + '_ {
+        self.module()
+            .exports
+            .iter()
+            .map(|(name, index)| (*name, *index))
+    }
+
+    pub fn get_export(&self, name: &str) -> Option<EntityIndex> {
+        self.module().exports.get(name).copied()
     }
 }

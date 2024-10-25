@@ -41,7 +41,7 @@ pub struct Translation<'wasm> {
     pub func_compile_inputs: PrimaryMap<DefinedFuncIndex, FuncCompileInput<'wasm>>,
 }
 
-impl<'wasm> Default for Translation<'wasm> {
+impl Default for Translation<'_> {
     fn default() -> Self {
         Self {
             module: TranslatedModule::default(),
@@ -93,7 +93,7 @@ pub struct TranslatedModule<'wasm> {
     pub num_escaped_functions: u32,
 }
 
-impl<'wasm> TranslatedModule<'wasm> {
+impl TranslatedModule<'_> {
     #[inline]
     pub fn func_index(&self, index: DefinedFuncIndex) -> FuncIndex {
         FuncIndex::from_u32(self.num_imported_functions + index.as_u32())
@@ -412,7 +412,7 @@ impl MemoryPlan {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TablePlan {
     pub ty: TableType,
 }

@@ -1,19 +1,17 @@
 //! Helper functions and structures for the translation.
 
-// use super::FuncEnvironment;
 use crate::translate::env::TranslationEnvironment;
-use core::u32;
 use cranelift_codegen::ir;
 use cranelift_frontend::FunctionBuilder;
 use wasmparser::{FuncValidator, WasmModuleResources};
 
 /// Get the parameter and result types for the given Wasm blocktype.
-pub fn blocktype_params_results<'a, T>(
-    validator: &'a FuncValidator<T>,
+pub fn blocktype_params_results<T>(
+    validator: &FuncValidator<T>,
     ty: wasmparser::BlockType,
 ) -> crate::TranslationResult<(
-    impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + 'a,
-    impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + 'a,
+    impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + '_,
+    impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + '_,
 )>
 where
     T: WasmModuleResources,
@@ -50,7 +48,7 @@ pub enum BlockTypeParamsOrReturns<'a> {
     Many(&'a [wasmparser::ValType], usize),
 }
 
-impl<'a> Iterator for BlockTypeParamsOrReturns<'a> {
+impl Iterator for BlockTypeParamsOrReturns<'_> {
     type Item = wasmparser::ValType;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -78,7 +76,7 @@ impl<'a> Iterator for BlockTypeParamsOrReturns<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for BlockTypeParamsOrReturns<'a> {}
+impl ExactSizeIterator for BlockTypeParamsOrReturns<'_> {}
 
 /// Create a `Block` with the given Wasm parameters.
 pub fn block_with_params(

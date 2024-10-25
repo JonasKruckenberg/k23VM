@@ -128,7 +128,7 @@ impl<'module_env, 'wasm> TranslationEnvironment<'module_env, 'wasm> {
     }
 }
 
-impl<'module_env, 'wasm> TranslationEnvironment<'module_env, 'wasm> {
+impl TranslationEnvironment<'_, '_> {
     fn vmctx(&mut self, func: &mut Function) -> ir::GlobalValue {
         self.vmctx.unwrap_or_else(|| {
             let vmctx = func.create_global_value(ir::GlobalValueData::VMContext);
@@ -257,7 +257,6 @@ impl<'module_env, 'wasm> TranslationEnvironment<'module_env, 'wasm> {
         };
 
         let (base_fact, data_mt) = if let Some(ptr_memtype) = ptr_memtype {
-            ir::MemoryTypeData::Memory { size: u64::MAX };
             // Create a memtype representing the untyped memory region.
             let data_mt = func.create_memory_type(ir::MemoryTypeData::Memory {
                 // Since we have one memory per address space, the maximum value this can be is u64::MAX

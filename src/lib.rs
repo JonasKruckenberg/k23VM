@@ -7,6 +7,7 @@ extern crate alloc;
 mod compile;
 mod const_eval;
 mod errors;
+mod func;
 mod guest_memory;
 mod indices;
 mod instance;
@@ -63,14 +64,17 @@ pub const HOST_PAGE_SIZE: usize = 4096;
 mod tests {
     use super::*;
     use crate::compile::Compiler;
-    use crate::module::Module;
-    use crate::store::Store;
-    use cranelift_codegen::settings::Configurable;
-    use tracing::log;
-    use wasmparser::Validator;
     use crate::const_eval::ConstExprEvaluator;
     use crate::instance_allocator::PlaceholderAllocatorDontUse;
     use crate::linker::Linker;
+    use crate::module::Module;
+    use crate::store::Store;
+    use crate::vmcontext::VMVal;
+    use alloc::vec;
+    use core::ptr;
+    use cranelift_codegen::settings::Configurable;
+    use tracing::log;
+    use wasmparser::Validator;
 
     #[test_log::test]
     fn fib_cpp() {
@@ -93,10 +97,33 @@ mod tests {
         let module = Module::from_binary(&mut validator, &compiler, &mut store, wasm).unwrap();
         log::debug!("{module:?}");
 
-        let instance = linker.instantiate(&mut store, &alloc, &module, &mut const_eval).unwrap();
+        let instance = linker
+            .instantiate(&mut store, &alloc, &module, &mut const_eval)
+            .unwrap();
         log::debug!("{instance:?}");
-        
-        log::debug!("{:?}", store.instance_data(instance.0));
+        instance.debug_print_vmctx(&store);
+
+        let export = instance.get_export(&mut store, "fib").unwrap();
+        let export = export.unwrap_func();
+
+        unsafe {
+            let sig = &module.module().types[export.func_ref.as_ref().type_index];
+
+            let mut args_results =
+                vec![VMVal { v128: [0; 16] }; usize::max(sig.params().len(), sig.results().len())];
+            // we want the 10th fibonacci number but this weird c++ impl I grabbed is 0-based *sigh*
+            args_results[0] = VMVal::i32(9);
+
+            (export.func_ref.as_ref().array_call)(
+                store.instance_data_mut(instance.0).vmctx.as_vmctx_mut(),
+                ptr::null_mut(),
+                args_results.as_mut_ptr(),
+                args_results.len(),
+            );
+
+            // the 10th fibonacci number should be 55
+            assert_eq!(args_results[0], VMVal::i32(55))
+        }
     }
 
     #[test_log::test]
@@ -120,7 +147,9 @@ mod tests {
         let module = Module::from_binary(&mut validator, &compiler, &mut store, wasm).unwrap();
         log::debug!("{module:?}");
 
-        let instance = linker.instantiate(&mut store, &alloc, &module, &mut const_eval).unwrap();
+        let instance = linker
+            .instantiate(&mut store, &alloc, &module, &mut const_eval)
+            .unwrap();
         log::debug!("{instance:?}");
 
         log::debug!("{:?}", store.instance_data(instance.0));

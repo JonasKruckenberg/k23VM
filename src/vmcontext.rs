@@ -2,7 +2,7 @@ use crate::guest_memory::round_usize_up_to_host_pages;
 use crate::guest_memory::MmapVec;
 use crate::indices::{
     DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex, FuncIndex, FuncRefIndex,
-    GlobalIndex, MemoryIndex, OwnedMemoryIndex, TableIndex,
+    GlobalIndex, MemoryIndex, OwnedMemoryIndex, TableIndex, TypeIndex,
 };
 use crate::translate::TranslatedModule;
 use core::ffi::c_void;
@@ -90,6 +90,7 @@ pub struct VMWasmCallFunction(VMFunctionBody);
 #[repr(C)]
 pub struct VMFunctionBody(u8);
 
+#[derive(Clone, Copy)]
 pub union VMVal {
     pub i32: i32,
     pub i64: i64,
@@ -103,7 +104,13 @@ pub union VMVal {
 
 impl fmt::Debug for VMVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("VMVal").finish()
+        unsafe { f.debug_tuple("VMVal").field(&self.v128).finish() }
+    }
+}
+
+impl PartialEq for VMVal {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { self.v128 == other.v128 }
     }
 }
 
@@ -187,9 +194,7 @@ impl VMVal {
     }
     #[inline]
     pub fn get_funcref(&self) -> *mut c_void {
-        unsafe {
-            self.funcref.map_addr(|i| usize::from_le(i))
-        }
+        unsafe { self.funcref.map_addr(usize::from_le) }
     }
     #[inline]
     pub fn get_externref(&self) -> u32 {
@@ -363,38 +368,40 @@ pub struct VMFuncRef {
     pub array_call: VMArrayCallFunction,
     /// Function pointer for this funcref if being called via the calling
     /// convention we use when compiling Wasm.
-    pub wasm_call: Option<NonNull<VMWasmCallFunction>>,
+    pub wasm_call: NonNull<VMWasmCallFunction>,
     // /// Function signature's type id.
     // pub type_index: VMSharedTypeIndex,
     /// The VM state associated with this function.
     pub vmctx: *mut VMContext,
+    pub type_index: TypeIndex,
 }
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct VMFunctionImport {
     pub from: *mut VMFuncRef,
-    pub vmctx: NonNull<VMContext>,
+    pub vmctx: *mut VMContext,
 }
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct VMTableImport {
     pub from: *mut VMTableDefinition,
-    pub vmctx: NonNull<VMContext>,
+    pub vmctx: *mut VMContext,
 }
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct VMMemoryImport {
     pub from: *mut VMMemoryDefinition,
-    pub vmctx: NonNull<VMContext>,
+    pub vmctx: *mut VMContext,
 }
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct VMGlobalImport {
     pub from: *mut VMGlobalDefinition,
+    pub vmctx: *mut VMContext,
 }
 
 #[derive(Debug, Clone)]

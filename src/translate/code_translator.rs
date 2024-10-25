@@ -3106,10 +3106,7 @@ fn optionally_bitcast_vector(
 
 #[inline(always)]
 fn is_non_canonical_v128(ty: Type) -> bool {
-    match ty {
-        I64X2 | I32X4 | I16X8 | F32X4 | F64X2 => true,
-        _ => false,
-    }
+    matches!(ty, I64X2 | I32X4 | I16X8 | F32X4 | F64X2)
 }
 
 /// Cast to I8X16, any vector values in `values` that are of "non-canonical" type (meaning, not

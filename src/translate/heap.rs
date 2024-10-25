@@ -231,7 +231,7 @@ impl IRHeap {
             result
         };
 
-        if offset_and_size > self.bound.into() {
+        if offset_and_size > self.bound {
             // 1. First special case: trap immediately if `offset + access_size >
             //    bound`, since we will end up being out-of-bounds regardless of the
             //    given `index`.
@@ -286,7 +286,7 @@ impl IRHeap {
                     index,
                     offset,
                     self.memory_type
-                        .and_then(|ty| Some((ty, self.bound + self.offset_guard_size))),
+                        .map(|ty| (ty, self.bound + self.offset_guard_size)),
                 ),
             ))
         } else {
@@ -328,13 +328,14 @@ impl IRHeap {
                     offset,
                     access_size,
                     spectre_mitigations_enabled,
-                    self.memory_type.and_then(|ty| Some((ty, self.bound))),
+                    self.memory_type.map(|ty| (ty, self.bound)),
                     oob,
                 ),
             ))
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn explicit_check_oob_condition_and_compute_addr(
         &self,
         pos: &mut FuncCursor,

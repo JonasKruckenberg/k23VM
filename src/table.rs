@@ -1,8 +1,8 @@
-use core::ops::Deref;
 use crate::guest_memory::{round_usize_up_to_host_pages, MmapVec};
 use crate::translate::TablePlan;
 use crate::vmcontext::{VMFuncRef, VMTableDefinition};
 use crate::TABLE_MAX;
+use core::ops::Deref;
 use core::ptr::NonNull;
 
 #[derive(Debug)]
@@ -19,7 +19,8 @@ impl Table {
         // TODO allow more ref types
         assert!(plan.ty.element_type.is_func_ref());
 
-        let mut elements = MmapVec::with_reserve(round_usize_up_to_host_pages(reserve_size)).unwrap();
+        let mut elements =
+            MmapVec::with_reserve(round_usize_up_to_host_pages(reserve_size)).unwrap();
         elements.try_extend_with(usize::try_from(plan.ty.initial).unwrap(), None);
 
         Self {
@@ -38,7 +39,7 @@ impl Table {
             current_length: u64::try_from(self.len()).unwrap(),
         }
     }
-    
+
     pub fn elements(&self) -> &[Option<NonNull<VMFuncRef>>] {
         self.elements.slice()
     }

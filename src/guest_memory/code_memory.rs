@@ -105,11 +105,11 @@ impl CodeMemory {
         tracing::trace!(
             "resolve_function_loc {func_loc:?}, text {:?} => {:?}",
             self.text,
-            addr
+            addr,
         );
 
         // Assert the function location actually lies in our text section
-        debug_assert!(self.text.start <= addr && self.text.end > addr + func_loc.length as usize);
+        debug_assert!(self.text.start <= addr && self.text.end >= addr + func_loc.length as usize);
 
         addr
     }
