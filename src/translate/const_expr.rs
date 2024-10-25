@@ -10,6 +10,47 @@ pub struct ConstExpr {
     ops: SmallVec<[ConstOp; 2]>,
 }
 
+impl ConstExpr {
+    /// Create a new const expression from a `wasmparser` const expression.
+    ///
+    /// Returns the new const expression as well as the escaping function
+    /// indices that appeared in `ref.func` instructions, if any.
+    pub fn from_wasmparser(
+        expr: wasmparser::ConstExpr<'_>,
+    ) -> crate::TranslationResult<(Self, SmallVec<[FuncIndex; 1]>)> {
+        let mut iter = expr
+            .get_operators_reader()
+            .into_iter_with_offsets()
+            .peekable();
+
+        let mut ops = SmallVec::<[ConstOp; 2]>::new();
+        let mut escaped = SmallVec::<[FuncIndex; 1]>::new();
+        while let Some(res) = iter.next() {
+            let (op, offset) = res?;
+
+            // If we reach an `end` instruction, and there are no more
+            // instructions after that, then we are done reading this const
+            // expression.
+            if matches!(op, wasmparser::Operator::End) && iter.peek().is_none() {
+                break;
+            }
+
+            // Track any functions that appear in `ref.func` so that callers can
+            // make sure to flag them as escaping.
+            if let wasmparser::Operator::RefFunc { function_index } = &op {
+                escaped.push(FuncIndex::from_u32(*function_index));
+            }
+
+            ops.push(ConstOp::from_wasmparser(op, offset)?);
+        }
+        Ok((Self { ops }, escaped))
+    }
+
+    pub fn ops(&self) -> impl ExactSizeIterator<Item = ConstOp> + use<'_> {
+        self.ops.iter().copied()
+    }
+}
+
 /// The subset of Wasm opcodes that are constant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ConstOp {
@@ -59,42 +100,5 @@ impl ConstOp {
                 ));
             }
         })
-    }
-}
-
-impl ConstExpr {
-    /// Create a new const expression from a `wasmparser` const expression.
-    ///
-    /// Returns the new const expression as well as the escaping function
-    /// indices that appeared in `ref.func` instructions, if any.
-    pub fn from_wasmparser(
-        expr: wasmparser::ConstExpr<'_>,
-    ) -> crate::TranslationResult<(Self, SmallVec<[FuncIndex; 1]>)> {
-        let mut iter = expr
-            .get_operators_reader()
-            .into_iter_with_offsets()
-            .peekable();
-
-        let mut ops = SmallVec::<[ConstOp; 2]>::new();
-        let mut escaped = SmallVec::<[FuncIndex; 1]>::new();
-        while let Some(res) = iter.next() {
-            let (op, offset) = res?;
-
-            // If we reach an `end` instruction, and there are no more
-            // instructions after that, then we are done reading this const
-            // expression.
-            if matches!(op, wasmparser::Operator::End) && iter.peek().is_none() {
-                break;
-            }
-
-            // Track any functions that appear in `ref.func` so that callers can
-            // make sure to flag them as escaping.
-            if let wasmparser::Operator::RefFunc { function_index } = &op {
-                escaped.push(FuncIndex::from_u32(*function_index));
-            }
-
-            ops.push(ConstOp::from_wasmparser(op, offset)?);
-        }
-        Ok((Self { ops }, escaped))
     }
 }

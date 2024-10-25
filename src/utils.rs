@@ -1,11 +1,9 @@
-use crate::translate::TranslationEnvironment;
 use core::alloc::Allocator;
 use core::hash::{BuildHasher, Hash};
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature, Type};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use wasmparser::{FuncType, ValType};
-
 #[macro_export]
 macro_rules! enum_accessors {
     ($bind:ident $(($variant:ident($ty:ty) $get:ident $unwrap:ident $cvt:expr))*) => ($(

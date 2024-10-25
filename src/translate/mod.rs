@@ -254,9 +254,8 @@ pub enum IRGlobal {
 
 #[derive(Debug)]
 pub enum EntityType {
-    /// A function type where the index points to the type section and records a
-    /// function signature.
-    Function(TypeIndex),
+    /// A function
+    Function(FuncIndex),
     /// A table with the specified element type and limits
     Table(TableIndex),
     /// A linear memory with the specified limits
@@ -270,7 +269,7 @@ pub enum EntityType {
 impl EntityType {
     enum_accessors! {
         e
-        (Function(TypeIndex) func unwrap_func *e)
+        (Function(FuncIndex) func unwrap_func *e)
         (Table(TableIndex) table unwrap_table *e)
         (Memory(MemoryIndex) memory unwrap_memory *e)
         (Global(GlobalIndex) global unwrap_global *e)

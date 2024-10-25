@@ -5,22 +5,23 @@
 extern crate alloc;
 
 mod compile;
+mod const_eval;
 mod errors;
+mod guest_memory;
 mod indices;
+mod instance;
+mod instance_allocator;
+mod linker;
+mod memory;
+mod module;
+mod store;
+mod table;
 mod translate;
 mod trap;
 mod utils;
 mod vmcontext;
 
-use alloc::format;
-use core::ops::Range;
-use core::{ptr, slice};
-use core::ptr::NonNull;
-use cranelift_codegen::settings::Configurable;
-use rustix::mm::{mprotect, MprotectFlags};
 pub use errors::TranslationError;
-use crate::translate::MemoryPlan;
-use crate::vmcontext::VMMemoryDefinition;
 
 pub(crate) type TranslationResult<T> = core::result::Result<T, TranslationError>;
 
@@ -51,52 +52,77 @@ pub const RELAXED_SIMD_DETERMINISTIC: bool = false;
 /// 2 GiB of guard pages
 /// TODO why does this help to eliminate bounds checks?
 pub const DEFAULT_OFFSET_GUARD_SIZE: u64 = 0x8000_0000;
-pub const DEFAULT_STATIC_MEMORY_RESERVATION: usize = 1 << 32;
+/// The absolute maximum size of a memory in bytes
+pub const MEMORY_MAX: usize = 1 << 32;
+/// The absolute maximum size of a table in elements
+pub const TABLE_MAX: usize = 1 << 10;
 
 pub const HOST_PAGE_SIZE: usize = 4096;
 
-/// Is `bytes` a multiple of the host page size?
-pub fn usize_is_multiple_of_host_page_size(bytes: usize) -> bool {
-    bytes % HOST_PAGE_SIZE == 0
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::Compiler;
+    use crate::module::Module;
+    use crate::store::Store;
+    use cranelift_codegen::settings::Configurable;
+    use tracing::log;
+    use wasmparser::Validator;
+    use crate::const_eval::ConstExprEvaluator;
+    use crate::instance_allocator::PlaceholderAllocatorDontUse;
+    use crate::linker::Linker;
 
-pub fn round_u64_up_to_host_pages(bytes: u64) -> u64 {
-    let page_size = u64::try_from(HOST_PAGE_SIZE).unwrap();
-    debug_assert!(page_size.is_power_of_two());
-    bytes
-        .checked_add(page_size - 1)
-        .map(|val| val & !(page_size - 1))
-        .expect(&format!(
-            "{bytes} is too large to be rounded up to a multiple of the host page size of {page_size}"
-        ))
-}
+    #[test_log::test]
+    fn fib_cpp() {
+        // Global state
+        let isa_builder = cranelift_codegen::isa::lookup(target_lexicon::HOST).unwrap();
+        let mut b = cranelift_codegen::settings::builder();
+        b.set("opt_level", "speed_and_size").unwrap();
+        let target_isa = isa_builder
+            .finish(cranelift_codegen::settings::Flags::new(b))
+            .unwrap();
+        let compiler = Compiler::new(target_isa);
+        let mut validator = Validator::new();
+        let mut store = Store::default();
+        let mut linker = Linker::default();
+        let mut const_eval = ConstExprEvaluator::default();
+        let alloc = PlaceholderAllocatorDontUse;
 
-/// Same as `round_u64_up_to_host_pages` but for `usize`s.
-pub fn round_usize_up_to_host_pages(bytes: usize) -> usize {
-    let bytes = u64::try_from(bytes).unwrap();
-    let rounded = round_u64_up_to_host_pages(bytes);
-    usize::try_from(rounded).unwrap()
-}
+        // actual module compilation & instantiation
+        let wasm = include_bytes!("../tests/fib_cpp.wasm");
+        let module = Module::from_binary(&mut validator, &compiler, &mut store, wasm).unwrap();
+        log::debug!("{module:?}");
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::engine::Engine;
-//     use crate::module::Module;
-//     use tracing::log;
-//     use crate::linker::Linker;
-// 
-//     #[test_log::test]
-//     fn smoke() {
-//         let engine = Engine::default();
-//         let mut store = Store::default();
-//         let mut linker = Linker::default();
-//         
-//         let wasm = include_bytes!("../tests/fib_cpp.wasm");
-//         let module = Module::from_binary(&engine, &mut store, wasm).unwrap();
-// 
-//         let instance = linker.instantiate(&engine, &mut store, &module).unwrap();
-//         
-//         log::debug!("{module:?}");
-//     }
-// }
+        let instance = linker.instantiate(&mut store, &alloc, &module, &mut const_eval).unwrap();
+        log::debug!("{instance:?}");
+        
+        log::debug!("{:?}", store.instance_data(instance.0));
+    }
+
+    #[test_log::test]
+    fn large() {
+        // Global state
+        let isa_builder = cranelift_codegen::isa::lookup(target_lexicon::HOST).unwrap();
+        let mut b = cranelift_codegen::settings::builder();
+        b.set("opt_level", "speed_and_size").unwrap();
+        let target_isa = isa_builder
+            .finish(cranelift_codegen::settings::Flags::new(b))
+            .unwrap();
+        let compiler = Compiler::new(target_isa);
+        let mut validator = Validator::new();
+        let mut store = Store::default();
+        let mut linker = Linker::default();
+        let mut const_eval = ConstExprEvaluator::default();
+        let alloc = PlaceholderAllocatorDontUse;
+
+        // actual module compilation & instantiation
+        let wasm = include_bytes!("../tests/kiwi-editor.wasm");
+        let module = Module::from_binary(&mut validator, &compiler, &mut store, wasm).unwrap();
+        log::debug!("{module:?}");
+
+        let instance = linker.instantiate(&mut store, &alloc, &module, &mut const_eval).unwrap();
+        log::debug!("{instance:?}");
+
+        log::debug!("{:?}", store.instance_data(instance.0));
+    }
+}

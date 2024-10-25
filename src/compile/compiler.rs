@@ -140,7 +140,9 @@ impl Compiler {
 
         let stack_limit = context.func.create_global_value(GlobalValueData::Load {
             base: vmctx,
-            offset: i32::try_from(env.vmctx_plan.vmctx_stack_limit()).unwrap().into(),
+            offset: i32::try_from(env.vmctx_plan.vmctx_stack_limit())
+                .unwrap()
+                .into(),
             global_type: isa.pointer_type(),
             flags: MemFlags::trusted(),
         });

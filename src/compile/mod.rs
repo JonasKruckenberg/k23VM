@@ -166,7 +166,7 @@ impl UnlinkedCompileOutputs {
         // TODO If configured attempt to use static memory initialization which
         // can either at runtime be implemented as a single memcpy to
         // initialize memory or otherwise enabling virtual-memory-tricks
-        // such as mmap'ing from a file to get copy-on-write.
+        // such as guest_memory'ing from a file to get copy-on-write.
 
         obj_builder.finish(output_buffer).unwrap();
 

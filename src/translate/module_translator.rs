@@ -202,7 +202,11 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
             let import = import?;
             let ty = match import.ty {
                 TypeRef::Func(index) => {
-                    let index = TypeIndex::from_u32(index);
+                    let signature = TypeIndex::from_u32(index);
+                    let index = self.result.module.functions.push(FunctionType {
+                        signature,
+                        func_ref: FuncRefIndex::reserved_value(),
+                    });
                     self.result.module.num_imported_functions += 1;
                     EntityType::Function(index)
                 }

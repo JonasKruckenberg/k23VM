@@ -1,3 +1,5 @@
+use crate::guest_memory::round_usize_up_to_host_pages;
+use crate::guest_memory::MmapVec;
 use crate::indices::{
     DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex, FuncIndex, FuncRefIndex,
     GlobalIndex, MemoryIndex, OwnedMemoryIndex, TableIndex,
@@ -11,6 +13,7 @@ use core::sync::atomic::AtomicUsize;
 use core::{fmt, mem};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_entity::packed_option::ReservedValue;
+use cranelift_entity::Unsigned;
 use wasmparser::ValType;
 
 pub const VMCONTEXT_MAGIC: u32 = u32::from_le_bytes(*b"vmcx");
@@ -104,11 +107,109 @@ impl fmt::Debug for VMVal {
     }
 }
 
+impl VMVal {
+    #[inline]
+    pub fn i32(i: i32) -> VMVal {
+        VMVal { i32: i.to_le() }
+    }
+    #[inline]
+    pub fn i64(i: i64) -> VMVal {
+        VMVal { i64: i.to_le() }
+    }
+    #[inline]
+    pub fn u32(i: u32) -> VMVal {
+        VMVal::i32(i as i32)
+    }
+    #[inline]
+    pub fn u64(i: u64) -> VMVal {
+        VMVal::i64(i as i64)
+    }
+    #[inline]
+    pub fn f32(i: u32) -> VMVal {
+        VMVal { f32: i.to_le() }
+    }
+    #[inline]
+    pub fn f64(i: u64) -> VMVal {
+        VMVal { f64: i.to_le() }
+    }
+    #[inline]
+    pub fn v128(i: u128) -> VMVal {
+        VMVal {
+            v128: i.to_le_bytes(),
+        }
+    }
+    #[inline]
+    pub fn funcref(ptr: *mut c_void) -> VMVal {
+        VMVal {
+            funcref: ptr.map_addr(|i| i.to_le()),
+        }
+    }
+    #[inline]
+    pub fn externref(e: u32) -> VMVal {
+        assert_eq!(e, 0, "gc not supported");
+        VMVal {
+            externref: e.to_le(),
+        }
+    }
+    #[inline]
+    pub fn anyref(r: u32) -> VMVal {
+        assert_eq!(r, 0, "gc not supported");
+        VMVal { anyref: r.to_le() }
+    }
+
+    #[inline]
+    pub fn get_i32(&self) -> i32 {
+        unsafe { i32::from_le(self.i32) }
+    }
+    #[inline]
+    pub fn get_i64(&self) -> i64 {
+        unsafe { i64::from_le(self.i64) }
+    }
+    #[inline]
+    pub fn get_u32(&self) -> u32 {
+        self.get_i32().unsigned()
+    }
+    #[inline]
+    pub fn get_u64(&self) -> u64 {
+        self.get_i64().unsigned()
+    }
+    #[inline]
+    pub fn get_f32(&self) -> u32 {
+        unsafe { u32::from_le(self.f32) }
+    }
+    #[inline]
+    pub fn get_f64(&self) -> u64 {
+        unsafe { u64::from_le(self.f64) }
+    }
+    #[inline]
+    pub fn get_v128(&self) -> u128 {
+        unsafe { u128::from_le_bytes(self.v128) }
+    }
+    #[inline]
+    pub fn get_funcref(&self) -> *mut c_void {
+        unsafe {
+            self.funcref.map_addr(|i| usize::from_le(i))
+        }
+    }
+    #[inline]
+    pub fn get_externref(&self) -> u32 {
+        let externref = u32::from_le(unsafe { self.externref });
+        assert_eq!(externref, 0, "gc not supported");
+        externref
+    }
+    #[inline]
+    pub fn get_anyref(&self) -> u32 {
+        let anyref = u32::from_le(unsafe { self.anyref });
+        assert_eq!(anyref, 0, "gc not supported");
+        anyref
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct VMTableDefinition {
     pub base: *mut u8,
-    pub current_length: u32,
+    pub current_length: u64,
 }
 
 #[derive(Debug)]
@@ -126,8 +227,8 @@ pub struct VMGlobalDefinition {
 
 impl VMGlobalDefinition {
     #[allow(clippy::needless_pass_by_value)]
-    pub unsafe fn from_vmval(val_raw: VMVal) -> Self {
-        Self { data: val_raw.v128 }
+    pub unsafe fn from_vmval(vmval: VMVal) -> Self {
+        Self { data: vmval.v128 }
     }
 
     pub unsafe fn to_vmval(&self, wasm_ty: &ValType) -> VMVal {
@@ -314,15 +415,15 @@ pub struct VMContextPlan {
     // offsets
     magic: u32,
     // builtins: u32,
+    imported_functions: u32,
+    imported_tables: u32,
+    imported_memories: u32,
+    imported_globals: u32,
     tables: u32,
     memories: u32,
     owned_memories: u32,
     globals: u32,
     func_refs: u32,
-    imported_functions: u32,
-    imported_tables: u32,
-    imported_memories: u32,
-    imported_globals: u32,
     stack_limit: u32,
     last_wasm_exit_fp: u32,
     last_wasm_exit_pc: u32,
@@ -589,6 +690,22 @@ impl VMContextPlan {
     #[inline]
     pub fn vmctx_memory_definition_base_offset(&self) -> u8 {
         u8::try_from(offset_of!(VMMemoryDefinition, base)).unwrap()
+    }
+}
+
+#[derive(Debug)]
+pub struct OwnedVMContext(MmapVec<u8>);
+
+impl OwnedVMContext {
+    pub(crate) fn try_new(plan: &VMContextPlan) -> crate::TranslationResult<Self> {
+        let vec = MmapVec::new_zeroed(round_usize_up_to_host_pages(plan.size() as usize))?;
+        Ok(Self(vec))
+    }
+    pub(crate) fn as_vmctx(&self) -> *const VMContext {
+        self.0.as_ptr().cast()
+    }
+    pub(crate) fn as_vmctx_mut(&mut self) -> *mut VMContext {
+        self.0.as_mut_ptr().cast()
     }
 }
 
