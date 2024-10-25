@@ -1,0 +1,47 @@
+[package]
+name = "k23-vm"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jonas Kruckenberg <iterpre@protonmail.com>"]
+license = "MIT"
+
+[dependencies]
+tracing = { version = "0.1.40", default-features = false, features = ["attributes", "log"] }
+object = { version = "0.36.4", default-features = false, features = ["read_core", "write_core", "elf"] }
+gimli = { version = "0.31.0", default-features = false, features = ["read"] }
+onlyerror = { version = "0.1.4", default-features = false }
+smallvec = { version = "1.6.1", features = ["union"] }
+spin = { version = "0.9.8", default-features = false, features = ["lock_api", "mutex", "spin_mutex"] }
+postcard = { version = "1.0.10", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.213", default-features = false }
+serde_derive = { version = "1.0.213", default-features = false }
+rustix = { version = "0.38.37", default-features = false, features = ["mm"] }
+
+# cranelift dependencies
+hashbrown = { version = "0.15", default-features = false, features = [
+    "inline-more",
+    "nightly",
+    "default-hasher",
+    "serde"
+] }
+wasmparser = { version = "0.219", default-features = false, features = ["features", "validate", "component-model"] }
+target-lexicon = { version = "0.12.14", default-features = false }
+cranelift-codegen = { git = "https://github.com/JonasKruckenberg/wasmtime", branch = "no_std3", default-features = false, features = [
+    "core",
+    "host-arch",
+] }
+cranelift-frontend = { git = "https://github.com/JonasKruckenberg/wasmtime", branch = "no_std3", default-features = false, features = [
+    "core",
+] }
+cranelift-entity = { git = "https://github.com/JonasKruckenberg/wasmtime", branch = "no_std3", default-features = false }
+
+[dev-dependencies]
+test-log = "0.2.16"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
+strip = true
+overflow-checks = true
+split-debuginfo = "packed"
