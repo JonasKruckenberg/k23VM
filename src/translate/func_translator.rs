@@ -232,12 +232,10 @@ fn parse_function_body(
     //
     // If the exit block is unreachable, it may not have the correct arguments, so we would
     // generate a return instruction that doesn't match the signature.
-    if state.reachable {
-        if !builder.is_unreachable() {
-            // env.handle_before_return(&state.stack, builder)?;
-            bitcast_wasm_returns(&mut state.stack, builder, env);
-            builder.ins().return_(&state.stack);
-        }
+    if state.reachable && !builder.is_unreachable() {
+        // env.handle_before_return(&state.stack, builder)?;
+        bitcast_wasm_returns(&mut state.stack, builder, env);
+        builder.ins().return_(&state.stack);
     }
 
     // Discard any remaining values on the stack. Either we just returned them,

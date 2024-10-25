@@ -8,9 +8,9 @@ use crate::store::{InstanceHandle, Store};
 use crate::table::Table;
 use crate::translate::{MemoryPlan, TableInitialValue, TablePlan, TableSegmentElements};
 use crate::vmcontext::{
-    OwnedVMContext, VMContext, VMContextPlan, VMFuncRef, VMFunctionBody, VMFunctionImport,
-    VMGlobalDefinition, VMGlobalImport, VMMemoryDefinition, VMMemoryImport, VMTableDefinition,
-    VMTableImport, VMWasmCallFunction, VMCONTEXT_MAGIC,
+    OwnedVMContext, VMArrayCallFunction, VMContext, VMContextPlan, VMFuncRef, VMFunctionBody,
+    VMFunctionImport, VMGlobalDefinition, VMGlobalImport, VMMemoryDefinition, VMMemoryImport,
+    VMTableDefinition, VMTableImport, VMWasmCallFunction, VMCONTEXT_MAGIC,
 };
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
@@ -46,7 +46,7 @@ impl Instance {
             data: &'a InstanceData<'wasm>,
         }
 
-        impl<'a, 'wasm> fmt::Debug for Dbg<'a, 'wasm> {
+        impl fmt::Debug for Dbg<'_, '_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 unsafe {
                     f.debug_struct("VMContext")
@@ -72,7 +72,7 @@ impl Instance {
         tracing::debug!(
             "{:#?}",
             Dbg {
-                data: &store.instance_data(self.0)
+                data: store.instance_data(self.0)
             }
         );
     }
@@ -187,9 +187,9 @@ impl<'wasm> InstanceData<'wasm> {
         };
 
         unsafe {
-            this.initialize_vmctx(const_eval, &module);
-            this.initialize_tables(const_eval, &module)?;
-            this.initialize_memories(const_eval, &module)?;
+            this.initialize_vmctx(const_eval, module);
+            this.initialize_tables(const_eval, module)?;
+            this.initialize_memories(const_eval, module)?;
         }
 
         // TODO optionally call start func
@@ -224,17 +224,23 @@ impl<'wasm> InstanceData<'wasm> {
                 .defined_func_index(index)
                 .expect("is this even possible?");
 
-            let info = &self.module.0.info.funcs[def_index];
-            let array_call = self.module.0.code.resolve_function_loc(
-                info.host_to_wasm_trampoline
-                    .expect("escaping function requires trampoline"),
-            );
-            let wasm_call = self.module.0.code.resolve_function_loc(info.wasm_func_loc);
+            let (array_call, wasm_call) = {
+                let info = &self.module.0.info.funcs[def_index];
+                let code = self.module.0.code.lock();
+
+                let array_call = code.resolve_function_loc(
+                    info.host_to_wasm_trampoline
+                        .expect("escaping function requires trampoline"),
+                );
+                let wasm_call = code.resolve_function_loc(info.wasm_func_loc);
+
+                (array_call, wasm_call)
+            };
 
             let ptr: *mut VMFuncRef =
                 self.vmctx_plus_offset_mut(vmctx_plan.vmctx_func_ref(func_ref_index));
             ptr.write(VMFuncRef {
-                array_call: mem::transmute(array_call),
+                array_call: mem::transmute::<usize, VMArrayCallFunction>(array_call),
                 wasm_call: NonNull::new(wasm_call as *mut VMWasmCallFunction).unwrap(),
                 vmctx: self.vmctx.as_vmctx_mut(),
                 type_index: signature_index,

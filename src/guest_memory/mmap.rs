@@ -10,6 +10,9 @@ pub struct Mmap {
     memory: NonNull<[u8]>,
 }
 
+unsafe impl Send for Mmap {}
+unsafe impl Sync for Mmap {}
+
 impl Mmap {
     pub fn new_empty() -> Self {
         Self {

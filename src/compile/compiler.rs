@@ -230,7 +230,7 @@ impl Compiler {
         builder.ins().return_(&[]);
         builder.finalize();
 
-        Ok(compiler.finish()?)
+        compiler.finish()
     }
 
     fn function_compiler(&self) -> FunctionCompiler<'_> {
@@ -252,7 +252,7 @@ struct FunctionCompiler<'a> {
     ctx: CompilationContext,
 }
 
-impl<'a> FunctionCompiler<'a> {
+impl FunctionCompiler<'_> {
     fn builder(&mut self, func: ir::Function) -> (FunctionBuilder<'_>, ir::Block) {
         self.ctx.codegen_context.func = func;
         let mut builder = FunctionBuilder::new(
@@ -329,7 +329,7 @@ fn declare_and_call(
         signature,
         colocated: true,
     });
-    builder.ins().call(callee, &args)
+    builder.ins().call(callee, args)
 }
 
 /// Used for loading the values of an array-call host function's value

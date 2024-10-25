@@ -48,11 +48,11 @@ impl<T> MmapVec<T> {
     }
 
     pub fn slice(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.as_ptr(), self.len * size_of::<T>()) }
+        unsafe { slice::from_raw_parts(self.as_ptr(), self.len) }
     }
 
     pub fn slice_mut(&mut self) -> &mut [T] {
-        unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len * size_of::<T>()) }
+        unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
     }
 
     #[inline]
@@ -142,7 +142,7 @@ impl object::write::WritableBuffer for MmapVec<u8> {
 
     #[inline]
     fn reserve(&mut self, size: usize) -> Result<(), ()> {
-        debug_assert!(self.is_empty() && self.mmap.len() == 0);
+        debug_assert!(self.is_empty() && self.mmap.is_empty());
         self.mmap = Mmap::with_reserve(round_usize_up_to_host_pages(size)).unwrap();
         Ok(())
     }
@@ -179,13 +179,13 @@ impl<T> DerefMut for MmapVecGuard<'_, T> {
     }
 }
 
-impl<'a, T> MmapVecGuard<'a, T> {
+impl<T> MmapVecGuard<'_, T> {
     pub fn finish(self) {
         mem::forget(self)
     }
 }
 
-impl<'a, T> Drop for MmapVecGuard<'a, T> {
+impl<T> Drop for MmapVecGuard<'_, T> {
     fn drop(&mut self) {
         self.vec.len = self.len;
     }

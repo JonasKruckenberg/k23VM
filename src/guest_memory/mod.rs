@@ -20,9 +20,7 @@ pub fn round_u64_up_to_host_pages(bytes: u64) -> u64 {
     bytes
         .checked_add(page_size - 1)
         .map(|val| val & !(page_size - 1))
-        .expect(&format!(
-            "{bytes} is too large to be rounded up to a multiple of the host page size of {page_size}"
-        ))
+        .unwrap_or_else(|| panic!("{bytes} is too large to be rounded up to a multiple of the host page size of {page_size}"))
 }
 
 /// Same as `round_u64_up_to_host_pages` but for `usize`s.

@@ -70,7 +70,7 @@ impl<'a> CompileJobs<'a> {
 
                 inputs.push(Box::new(move |compiler| {
                     let function =
-                        compiler.compile_host_to_wasm_trampoline(&module, def_func_index)?;
+                        compiler.compile_host_to_wasm_trampoline(module, def_func_index)?;
 
                     Ok(CompileOutput {
                         key: CompileKey::host_to_wasm_trampoline(def_func_index),

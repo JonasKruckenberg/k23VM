@@ -52,7 +52,7 @@ pub fn translate_operator(
     env: &mut TranslationEnvironment,
 ) -> crate::TranslationResult<()> {
     if !state.reachable {
-        translate_unreachable_operator(validator, &op, builder, state, env)?;
+        translate_unreachable_operator(validator, op, builder, state, env)?;
         return Ok(());
     }
 
@@ -1098,9 +1098,7 @@ pub fn translate_operator(
         Operator::TableSize { table: index } => {
             state.push1(env.translate_table_size(builder.cursor(), TableIndex::from_u32(*index))?);
         }
-        Operator::RefNull { hty } => {
-            state.push1(env.translate_ref_null(builder.cursor(), hty.clone())?)
-        }
+        Operator::RefNull { hty } => state.push1(env.translate_ref_null(builder.cursor(), *hty)?),
         Operator::RefIsNull => {
             let value = state.pop1();
             state.push1(env.translate_ref_is_null(builder.cursor(), value)?);
@@ -2703,7 +2701,7 @@ fn translate_load(
     let index = state.pop1();
     let mem_op_size = mem_op_size(opcode, result_ty);
 
-    let heap = state.get_heap(&mut builder.func, memory_index, env)?;
+    let heap = state.get_heap(builder.func, memory_index, env)?;
     let (flags, wasm_index, base) =
         match heap.prepare_addr(builder, index, mem_op_size, memarg, env)? {
             Reachability::Unreachable => return Ok(Reachability::Unreachable),
@@ -2732,7 +2730,7 @@ fn translate_store(
     let val_ty = builder.func.dfg.value_type(val);
     let mem_op_size = mem_op_size(opcode, val_ty);
 
-    let heap = state.get_heap(&mut builder.func, memory_index, env)?;
+    let heap = state.get_heap(builder.func, memory_index, env)?;
     let (flags, wasm_index, base) = unwrap_or_return_unreachable_state!(
         state,
         heap.prepare_addr(builder, index, mem_op_size, memarg, env)?

@@ -42,7 +42,7 @@ impl<'wasm> Store<'wasm> {
         match (|| unsafe {
             alloc.allocate_memories(module.module(), &mut memories)?;
             alloc.allocate_tables(module.module(), &mut tables)?;
-            alloc.allocate_vmctx(module.module(), &module.vmctx_plan())
+            alloc.allocate_vmctx(module.module(), module.vmctx_plan())
         })() {
             Ok(vmctx) => {
                 let handle = InstanceHandle(self.instances.len());

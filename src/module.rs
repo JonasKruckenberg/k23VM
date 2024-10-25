@@ -6,6 +6,7 @@ use crate::translate::{Import, ModuleTranslator, TranslatedModule, Translation};
 use crate::vmcontext::VMContextPlan;
 use crate::HOST_PAGE_SIZE;
 use alloc::sync::Arc;
+use spin::Mutex;
 use tracing::log;
 use wasmparser::Validator;
 
@@ -15,7 +16,7 @@ pub struct Module<'wasm>(pub(crate) Arc<ModuleInner<'wasm>>);
 #[derive(Debug)]
 pub(crate) struct ModuleInner<'wasm> {
     pub info: Arc<CompiledModuleInfo<'wasm>>,
-    pub code: Arc<CodeMemory>,
+    pub code: Arc<Mutex<CodeMemory>>,
     pub vmctx_plan: VMContextPlan,
 }
 
@@ -67,7 +68,7 @@ impl<'wasm> Module<'wasm> {
         Ok(Self(Arc::new(ModuleInner {
             vmctx_plan: VMContextPlan::for_module(compiler.target_isa(), &info.module),
             info: Arc::new(info),
-            code: Arc::new(code),
+            code: Arc::new(Mutex::new(code)),
         })))
     }
 

@@ -40,7 +40,7 @@ impl CodeMemory {
             };
 
             // Double-check that sections are all aligned properly.
-            if section.align() != 0 && range.len() != 0 {
+            if section.align() != 0 && !range.is_empty() {
                 // debug_assert!(
                 //     range.is_aligned(usize::try_from(section.align()).unwrap()),
                 //     "section `{}` isn't aligned to {:#x} ({range:?})",

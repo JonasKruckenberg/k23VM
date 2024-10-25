@@ -63,7 +63,7 @@ pub trait InstanceAllocator {
     ) -> crate::TranslationResult<()> {
         for (index, plan) in module.memory_plans.iter() {
             if let Some(def_index) = module.defined_memory_index(index) {
-                let new_def_index = memories.push(self.allocate_memory(&module, plan, def_index)?);
+                let new_def_index = memories.push(self.allocate_memory(module, plan, def_index)?);
                 debug_assert_eq!(def_index, new_def_index);
             }
         }
@@ -77,7 +77,7 @@ pub trait InstanceAllocator {
     ) -> crate::TranslationResult<()> {
         for (index, plan) in module.table_plans.iter() {
             if let Some(def_index) = module.defined_table_index(index) {
-                let new_def_index = tables.push(self.allocate_table(&module, plan, def_index)?);
+                let new_def_index = tables.push(self.allocate_table(module, plan, def_index)?);
                 debug_assert_eq!(def_index, new_def_index);
             }
         }
