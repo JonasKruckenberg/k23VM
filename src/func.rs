@@ -45,7 +45,7 @@ impl Func {
         }
 
         self.call_unchecked_raw(store, values_vec.as_mut_ptr(), values_vec_size);
-        
+
         results.copy_from_slice(&values_vec);
         values_vec.truncate(0);
         store.return_wasm_vmval_storage(values_vec);
