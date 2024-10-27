@@ -31,10 +31,6 @@ pub struct DefinedMemoryIndex(u32);
 entity_impl!(DefinedMemoryIndex);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct OwnedMemoryIndex(u32);
-entity_impl!(OwnedMemoryIndex);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GlobalIndex(u32);
 entity_impl!(GlobalIndex);
 

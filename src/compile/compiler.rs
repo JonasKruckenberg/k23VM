@@ -79,33 +79,33 @@ impl Compiler {
         &self,
         inputs: CompileJobs,
     ) -> Result<UnlinkedCompileOutputs, CompileError> {
-        let mut indices = BTreeMap::new();
-        let mut outputs: BTreeMap<u32, BTreeMap<CompileKey, CompileOutput>> = BTreeMap::new();
+        let mut indices: BTreeMap<u32, BTreeMap<CompileKey, usize>> = BTreeMap::new();
+        let mut outputs = Vec::with_capacity(inputs.0.len());
 
-        for (idx, f) in inputs.0.into_iter().enumerate() {
+        for f in inputs.0.into_iter() {
             let output = f(self)?;
-            indices.insert(output.key, idx);
-
-            outputs
+            indices
                 .entry(output.key.kind())
                 .or_default()
-                .insert(output.key, output);
+                .insert(output.key, outputs.len());
+            outputs.push(output);
         }
 
         let mut unlinked_compile_outputs = UnlinkedCompileOutputs { indices, outputs };
-        let flattened: Vec<_> = unlinked_compile_outputs
-            .outputs
-            .values()
-            .flat_map(|inner| inner.values())
-            .collect();
 
-        let mut builtins = BTreeMap::new();
-
-        // compile_required_builtins(engine, module, flattened.into_iter(), &mut builtins)?;
-
-        unlinked_compile_outputs
-            .outputs
-            .insert(CompileKey::WASM_TO_BUILTIN_TRAMPOLINE_KIND, builtins);
+        // let flattened: Vec<_> = unlinked_compile_outputs
+        //     .outputs
+        //     .into_iter()
+        //     .flat_map(|inner| inner.values())
+        //     .collect();
+        //
+        // let mut builtins = BTreeMap::new();
+        //
+        // // compile_required_builtins(engine, module, flattened.into_iter(), &mut builtins)?;
+        //
+        // unlinked_compile_outputs
+        //     .outputs
+        //     .insert(CompileKey::WASM_TO_BUILTIN_TRAMPOLINE_KIND, builtins);
 
         Ok(unlinked_compile_outputs)
     }
@@ -271,6 +271,7 @@ impl FunctionCompiler<'_> {
         let context = &mut self.ctx.codegen_context;
         let isa = &*self.compiler.isa;
 
+        // context.set_disasm(true);
         let compiled_code =
             context.compile(self.compiler.target_isa(), &mut ControlPlane::default())?;
 
@@ -299,11 +300,9 @@ struct CompilationContext {
 
 impl Default for CompilationContext {
     fn default() -> Self {
-        let mut codegen_context = Context::new();
-        codegen_context.set_disasm(true);
         Self {
             func_translator: FuncTranslator::new(),
-            codegen_context,
+            codegen_context: Context::new(),
             validator_allocations: Default::default(),
         }
     }

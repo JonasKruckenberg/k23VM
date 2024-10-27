@@ -1,9 +1,9 @@
-use crate::guest_memory::usize_is_multiple_of_host_page_size;
-use crate::HOST_PAGE_SIZE;
-use core::ops::Range;
-use core::ptr::NonNull;
-use core::{ptr, slice};
+use crate::utils::usize_is_multiple_of_host_page_size;
+use core::slice;
 use rustix::mm::MprotectFlags;
+use std::ops::Range;
+use std::ptr;
+use std::ptr::NonNull;
 
 #[derive(Debug)]
 pub struct Mmap {
@@ -11,6 +11,7 @@ pub struct Mmap {
 }
 
 unsafe impl Send for Mmap {}
+
 unsafe impl Sync for Mmap {}
 
 impl Mmap {
@@ -85,6 +86,16 @@ impl Mmap {
 
     pub fn make_accessible(&mut self, start: usize, len: usize) -> crate::TranslationResult<()> {
         let ptr = self.memory.as_ptr();
+        assert!(start + len <= self.memory.len());
+        assert!(unsafe {
+            ptr.byte_add(start).cast::<u8>() <= ptr.byte_add(self.memory.len()).cast::<u8>()
+        });
+        assert_eq!(
+            unsafe { ptr.byte_add(start).cast::<u8>() } as usize % crate::host_page_size(),
+            0,
+            "changing of protections isn't page-aligned",
+        );
+
         unsafe {
             rustix::mm::mprotect(
                 ptr.byte_add(start).cast(),
@@ -106,7 +117,7 @@ impl Mmap {
         assert!(range.end <= self.len());
         assert!(range.start <= range.end);
         assert_eq!(
-            range.start % HOST_PAGE_SIZE,
+            range.start % crate::host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );
@@ -134,16 +145,12 @@ impl Mmap {
         Ok(())
     }
 
-    pub unsafe fn make_readonly(
-        &self,
-        range: Range<usize>,
-        enable_branch_protection: bool,
-    ) -> crate::TranslationResult<()> {
+    pub unsafe fn make_readonly(&self, range: Range<usize>) -> crate::TranslationResult<()> {
         assert!(range.start <= self.len());
         assert!(range.end <= self.len());
         assert!(range.start <= range.end);
         assert_eq!(
-            range.start % HOST_PAGE_SIZE,
+            range.start % crate::host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );

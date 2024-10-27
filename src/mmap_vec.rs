@@ -1,5 +1,5 @@
-use crate::guest_memory::mmap::Mmap;
-use crate::guest_memory::round_usize_up_to_host_pages;
+use crate::placeholder::Mmap;
+use crate::utils::round_usize_up_to_host_pages;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::{mem, ptr, slice};
@@ -137,13 +137,13 @@ impl<T> Deref for MmapVec<T> {
 impl object::write::WritableBuffer for MmapVec<u8> {
     #[inline]
     fn len(&self) -> usize {
-        self.len()
+        MmapVec::len(self)
     }
 
     #[inline]
     fn reserve(&mut self, size: usize) -> Result<(), ()> {
         debug_assert!(self.is_empty() && self.mmap.is_empty());
-        self.mmap = Mmap::with_reserve(round_usize_up_to_host_pages(size)).unwrap();
+        self.mmap = Mmap::new(round_usize_up_to_host_pages(size)).unwrap();
         Ok(())
     }
 

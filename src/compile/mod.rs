@@ -10,22 +10,54 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use cranelift_entity::PrimaryMap;
-use object::write::WritableBuffer;
-
 pub use compiled_function::{
     CompiledFunction, CompiledFunctionMetadata, Relocation, RelocationTarget, TrapInfo,
 };
 pub use compiler::Compiler;
+use cranelift_entity::PrimaryMap;
 pub use obj_builder::{
     FunctionLoc, ObjectBuilder, ELFOSABI_K23, ELF_K23_ENGINE, ELF_K23_INFO, ELF_K23_TRAPS,
     ELF_TEXT, ELF_WASM_DATA, ELF_WASM_DWARF, ELF_WASM_NAMES,
 };
+use object::write::WritableBuffer;
 
 #[derive(Debug)]
 pub struct CompiledModuleInfo<'wasm> {
     pub module: TranslatedModule<'wasm>,
     pub funcs: PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo>,
+}
+
+impl CompiledModuleInfo<'_> {
+    pub fn text_offset_to_func(&self, text_offset: usize) -> Option<(DefinedFuncIndex, u32)> {
+        let text_offset = u32::try_from(text_offset).unwrap();
+
+        let index = match self.funcs.binary_search_values_by_key(&text_offset, |e| {
+            debug_assert!(e.wasm_func_loc.length > 0);
+            // Return the inclusive "end" of the function
+            e.wasm_func_loc.start + e.wasm_func_loc.length - 1
+        }) {
+            Ok(k) => {
+                // Exact match, pc is at the end of this function
+                k
+            }
+            Err(k) => {
+                // Not an exact match, k is where `pc` would be "inserted"
+                // Since we key based on the end, function `k` might contain `pc`,
+                // so we'll validate on the range check below
+                k
+            }
+        };
+
+        let CompiledFunctionInfo { wasm_func_loc, .. } = self.funcs.get(index)?;
+        let start = wasm_func_loc.start;
+        let end = wasm_func_loc.start + wasm_func_loc.length;
+
+        if text_offset < start || end < text_offset {
+            return None;
+        }
+
+        Some((index, text_offset - wasm_func_loc.start))
+    }
 }
 
 #[derive(Debug)]
@@ -92,8 +124,8 @@ impl<'a> CompileJobs<'a> {
 
 #[derive(Debug)]
 pub struct UnlinkedCompileOutputs {
-    indices: BTreeMap<CompileKey, usize>,
-    outputs: BTreeMap<u32, BTreeMap<CompileKey, CompileOutput>>,
+    indices: BTreeMap<u32, BTreeMap<CompileKey, usize>>,
+    outputs: Vec<CompileOutput>,
 }
 
 #[derive(Debug)]
@@ -114,50 +146,44 @@ impl UnlinkedCompileOutputs {
         mut obj_builder: ObjectBuilder,
         output_buffer: &mut T,
     ) -> CompiledModuleInfo<'wasm> {
-        let flattened: Vec<_> = self
-            .outputs
-            .values()
-            .flat_map(|inner| inner.values())
-            .collect();
-
-        let text_builder = compiler.target_isa().text_section_builder(flattened.len());
-
+        let text_builder = compiler
+            .target_isa()
+            .text_section_builder(self.outputs.len());
         let mut text_builder = obj_builder.text_builder(text_builder);
 
         let symbol_ids_and_locs =
-            text_builder.push_funcs(flattened.into_iter(), |callee| match callee {
+            text_builder.push_funcs(self.outputs.iter(), |callee| match callee {
                 RelocationTarget::Wasm(callee_index) => {
                     let def_func_index = module.defined_func_index(callee_index).unwrap();
-                    self.indices[&CompileKey::wasm_function(def_func_index)]
+
+                    self.indices[&CompileKey::WASM_FUNCTION_KIND]
+                        [&CompileKey::wasm_function(def_func_index)]
                 }
             });
 
-        text_builder.finish(compiler.target_isa().function_alignment().preferred as u64);
+        text_builder.finish(crate::host_page_size() as u64);
 
         let wasm_functions = self
-            .outputs
+            .indices
             .remove(&CompileKey::WASM_FUNCTION_KIND)
             .unwrap_or_default()
             .into_iter();
 
-        let funcs: PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo> = wasm_functions
-            .map(|(key, _)| {
-                let wasm_func_index = self.indices[&key];
-                let (_, wasm_func_loc) = symbol_ids_and_locs[wasm_func_index];
+        let mut host_to_wasm_trampolines = self
+            .indices
+            .remove(&CompileKey::HOST_TO_WASM_TRAMPOLINE_KIND)
+            .unwrap_or_default();
 
-                let host_to_wasm_trampoline = self
-                    .indices
-                    .get(&CompileKey {
-                        namespace: CompileKey::HOST_TO_WASM_TRAMPOLINE_KIND,
-                        index: key.index,
-                    })
-                    .map(|wasm_func_index| {
-                        let (_, trampoline_func_loc) = symbol_ids_and_locs[*wasm_func_index];
-                        trampoline_func_loc
-                    });
+        let funcs: PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo> = wasm_functions
+            .map(|(key, index)| {
+                let host_to_wasm_trampoline_key =
+                    CompileKey::host_to_wasm_trampoline(DefinedFuncIndex::from_u32(key.index));
+                let host_to_wasm_trampoline = host_to_wasm_trampolines
+                    .remove(&host_to_wasm_trampoline_key)
+                    .map(|index| symbol_ids_and_locs[index].1);
 
                 CompiledFunctionInfo {
-                    wasm_func_loc,
+                    wasm_func_loc: symbol_ids_and_locs[index].1,
                     host_to_wasm_trampoline,
                 }
             })
@@ -212,13 +238,6 @@ impl CompileKey {
         }
     }
 
-    // pub fn wasm_to_builtin_trampoline(index: BuiltinFunctionIndex) -> Self {
-    //     Self {
-    //         namespace: Self::WASM_TO_BUILTIN_TRAMPOLINE_KIND,
-    //         index: index.as_u32(),
-    //     }
-    // }
-
     fn host_to_wasm_trampoline(index: DefinedFuncIndex) -> Self {
         let module = 0; // TODO change this when we support multiple modules per compilation (components?)
         Self {
@@ -226,11 +245,4 @@ impl CompileKey {
             index: index.as_u32(),
         }
     }
-
-    // fn wasm_to_native_trampoline(index: TypeIndex) -> Self {
-    //     Self {
-    //         namespace: Self::WASM_TO_NATIVE_TRAMPOLINE_KIND,
-    //         index: index.as_u32(),
-    //     }
-    // }
 }

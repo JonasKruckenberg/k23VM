@@ -4,19 +4,20 @@ use crate::indices::{
 };
 use crate::translate::heap::IRHeap;
 use crate::translate::{IRGlobal, TranslatedModule};
-use crate::utils::value_type;
+use crate::utils::{value_type, wasm_call_signature};
 use crate::vmcontext::VMContextPlan;
 use alloc::vec;
+use alloc::vec::Vec;
 use cranelift_codegen::cursor::FuncCursor;
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::immediates::Offset32;
 use cranelift_codegen::ir::types::{I32, I64};
 use cranelift_codegen::ir::{
-    Fact, FuncRef, Function, GlobalValue, Inst, MemFlags, SigRef, Signature, Type, Value,
+    ArgumentPurpose, Fact, FuncRef, Function, GlobalValue, Inst, InstBuilder, MemFlags, SigRef,
+    Signature, Type, Value,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
-use tracing::log;
 use wasmparser::{HeapType, ValType};
 
 /// Environment state required for function translation.
@@ -246,10 +247,8 @@ impl TranslationEnvironment<'_, '_> {
                 }
                 // The memory is defined here (good ol' classic memories)
                 Some(def_index) => {
-                    let owned_index = self.module.owned_memory_index(def_index);
-                    let owned_base_offset =
-                        self.vmctx_plan.vmctx_memory_definition_base(owned_index);
-                    let current_base_offset = i32::try_from(owned_base_offset).unwrap();
+                    let base_offset = self.vmctx_plan.vmctx_memory_definition_base(def_index);
+                    let current_base_offset = i32::try_from(base_offset).unwrap();
 
                     (vmctx, current_base_offset, self.pcc_vmctx_memtype)
                 }
@@ -320,7 +319,7 @@ impl TranslationEnvironment<'_, '_> {
             page_size_log2: mp.page_size_log2,
         };
 
-        log::debug!("Created heap for memory {index:?}: {heap:?}");
+        tracing::debug!("Created heap for memory {index:?}: {heap:?}");
 
         Ok(heap)
     }
@@ -330,7 +329,39 @@ impl TranslationEnvironment<'_, '_> {
         func: &mut Function,
         index: FuncIndex,
     ) -> crate::TranslationResult<FuncRef> {
-        todo!()
+        // log::trace!("{:#?}", self.module);
+        let sig_index = self.module.functions[index].signature;
+        let sig = &self.module.types[sig_index];
+
+        let sig = wasm_call_signature(self.isa, sig);
+        let signature = func.import_signature(sig);
+
+        let name =
+            ir::ExternalName::User(func.declare_imported_user_function(ir::UserExternalName {
+                namespace: crate::NS_WASM_FUNC,
+                index: index.as_u32(),
+            }));
+
+        Ok(func.import_function(ir::ExtFuncData {
+            name,
+            signature,
+
+            // the value of this flag determines the codegen for calls to this
+            // function. if this flag is `false` then absolute relocations will
+            // be generated for references to the function, which requires
+            // load-time relocation resolution. if this flag is set to `true`
+            // then relative relocations are emitted which can be resolved at
+            // object-link-time, just after all functions are compiled.
+            //
+            // this flag is set to `true` for functions defined in the object
+            // we'll be defining in this compilation unit, or everything local
+            // to the wasm module. this means that between functions in a wasm
+            // module there's relative calls encoded. all calls external to a
+            // wasm module (e.g. imports or libcalls) are either encoded through
+            // the `vmcontext` as relative jumps (hence no relocations) or
+            // they're libcalls with absolute relocations.
+            colocated: self.module.defined_func_index(index).is_some(),
+        }))
     }
 
     pub(crate) fn make_indirect_sig(
@@ -372,11 +403,62 @@ impl TranslationEnvironment<'_, '_> {
     pub fn translate_call(
         &mut self,
         builder: &mut FunctionBuilder,
-        _callee_index: FuncIndex,
+        callee_index: FuncIndex,
         callee: FuncRef,
         call_args: &[Value],
     ) -> crate::TranslationResult<Inst> {
-        todo!()
+        let mut real_call_args = Vec::with_capacity(call_args.len() + 2);
+        let caller_vmctx = builder
+            .func
+            .special_param(ArgumentPurpose::VMContext)
+            .unwrap();
+
+        // If the function is locally defined to a direct call
+        if !self.module.is_imported_func(callee_index) {
+            // First append the callee vmctx address, which is the same as the caller vmctx in
+            // this case.
+            real_call_args.push(caller_vmctx);
+
+            // Then append the caller vmctx address.
+            real_call_args.push(caller_vmctx);
+
+            // Then append the regular call arguments.
+            real_call_args.extend_from_slice(call_args);
+
+            Ok(builder.ins().call(callee, &real_call_args))
+        } else {
+            let pointer_type = self.pointer_type();
+            let sig_ref = builder.func.dfg.ext_funcs[callee].signature;
+            let vmctx = self.vmctx(builder.func);
+            let base = builder.ins().global_value(pointer_type, vmctx);
+            let mem_flags = MemFlags::trusted().with_readonly();
+
+            // Load the callee address.
+            let body_offset = i32::try_from(
+                self.vmctx_plan
+                    .vmctx_function_import_wasm_call(callee_index),
+            )
+            .unwrap();
+            let func_addr = builder
+                .ins()
+                .load(pointer_type, mem_flags, base, body_offset);
+
+            // First append the callee vmctx address.
+            let vmctx_offset =
+                i32::try_from(self.vmctx_plan.vmctx_function_import_vmctx(callee_index)).unwrap();
+            let vmctx = builder
+                .ins()
+                .load(pointer_type, mem_flags, base, vmctx_offset);
+            real_call_args.push(vmctx);
+            real_call_args.push(caller_vmctx);
+
+            // Then append the regular call arguments.
+            real_call_args.extend_from_slice(call_args);
+
+            Ok(builder
+                .ins()
+                .call_indirect(sig_ref, func_addr, &real_call_args))
+        }
     }
 
     /// Translate a WASM `call_indirect` instruction at the builder's current

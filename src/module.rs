@@ -1,10 +1,10 @@
+use crate::code_memory::CodeMemory;
 use crate::compile::{CompileJobs, CompiledModuleInfo, Compiler, ObjectBuilder};
-use crate::guest_memory::{CodeMemory, MmapVec};
 use crate::indices::EntityIndex;
+use crate::mmap_vec::MmapVec;
 use crate::store::Store;
 use crate::translate::{Import, ModuleTranslator, TranslatedModule, Translation};
 use crate::vmcontext::VMContextPlan;
-use crate::HOST_PAGE_SIZE;
 use alloc::sync::Arc;
 use spin::Mutex;
 use tracing::log;
@@ -16,7 +16,7 @@ pub struct Module<'wasm>(pub(crate) Arc<ModuleInner<'wasm>>);
 #[derive(Debug)]
 pub(crate) struct ModuleInner<'wasm> {
     pub info: Arc<CompiledModuleInfo<'wasm>>,
-    pub code: Arc<Mutex<CodeMemory>>,
+    pub code: Arc<CodeMemory>,
     pub vmctx_plan: VMContextPlan,
 }
 
@@ -29,8 +29,6 @@ impl<'wasm> Module<'wasm> {
     ) -> crate::TranslationResult<Self> {
         tracing::trace!("Translating module to Cranelift IR...");
         let translation = ModuleTranslator::new(validator).translate(bytes)?;
-
-        tracing::debug!("{translation:?}");
 
         tracing::trace!("Compiling functions to machine code...");
         let Translation {
@@ -64,11 +62,14 @@ impl<'wasm> Module<'wasm> {
 
         let mut code = CodeMemory::new(code_buffer);
         code.publish();
+        let code = Arc::new(code);
+
+        crate::trap::signals::register_code(&code);
 
         Ok(Self(Arc::new(ModuleInner {
             vmctx_plan: VMContextPlan::for_module(compiler.target_isa(), &info.module),
             info: Arc::new(info),
-            code: Arc::new(Mutex::new(code)),
+            code,
         })))
     }
 

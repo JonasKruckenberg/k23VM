@@ -302,11 +302,13 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 name = "k23-vm"
 version = "0.1.0"
 dependencies = [
+ "cfg-if",
  "cranelift-codegen",
  "cranelift-entity",
  "cranelift-frontend",
  "gimli",
  "hashbrown 0.15.0",
+ "libc",
  "object",
  "onlyerror",
  "postcard",

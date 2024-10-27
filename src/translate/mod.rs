@@ -11,7 +11,7 @@ mod utils;
 use crate::indices::{
     DataIndex, DefinedFuncIndex, DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex,
     ElemIndex, EntityIndex, FieldIndex, FuncIndex, FuncRefIndex, GlobalIndex, LabelIndex,
-    LocalIndex, MemoryIndex, OwnedMemoryIndex, TableIndex, TagIndex, TypeIndex,
+    LocalIndex, MemoryIndex, TableIndex, TagIndex, TypeIndex,
 };
 use crate::{enum_accessors, DEFAULT_OFFSET_GUARD_SIZE, WASM32_MAX_SIZE};
 use alloc::boxed::Box;
@@ -152,28 +152,6 @@ impl TranslatedModule<'_> {
         index.as_u32() < self.num_imported_memories
     }
 
-    /// Convert a `DefinedMemoryIndex` into an `OwnedMemoryIndex`. Returns None
-    /// if the index is an imported memory.
-    #[inline]
-    pub fn owned_memory_index(&self, memory: DefinedMemoryIndex) -> OwnedMemoryIndex {
-        assert!(
-            memory.index() < self.memory_plans.len(),
-            "non-shared memory must have an owned index"
-        );
-
-        // Once we know that the memory index is not greater than the number of
-        // plans, we can iterate through the plans up to the memory index and
-        // count how many are not shared (i.e., owned).
-        let owned_memory_index = self
-            .memory_plans
-            .iter()
-            .skip(self.num_imported_memories as usize)
-            .take(memory.index())
-            .filter(|(_, mp)| !mp.shared)
-            .count();
-        OwnedMemoryIndex::new(owned_memory_index)
-    }
-
     #[inline]
     pub fn global_index(&self, index: DefinedGlobalIndex) -> GlobalIndex {
         GlobalIndex::from_u32(self.num_imported_globals + index.as_u32())
@@ -213,20 +191,9 @@ impl TranslatedModule<'_> {
     pub fn num_defined_memories(&self) -> u32 {
         u32::try_from(self.memory_plans.len()).unwrap() - self.num_imported_memories
     }
-    pub fn num_owned_memories(&self) -> u32 {
-        u32::try_from(
-            self.memory_plans
-                .iter()
-                .skip(self.num_imported_memories as usize)
-                .filter(|(_, ty)| !ty.shared)
-                .count(),
-        )
-        .unwrap()
-    }
     pub fn num_defined_globals(&self) -> u32 {
         u32::try_from(self.globals.len()).unwrap() - self.num_imported_globals
     }
-
     pub fn num_escaped_funcs(&self) -> u32 {
         self.num_escaped_functions
     }

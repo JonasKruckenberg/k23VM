@@ -34,6 +34,8 @@ cranelift-frontend = { git = "https://github.com/JonasKruckenberg/wasmtime", bra
     "core",
 ] }
 cranelift-entity = { git = "https://github.com/JonasKruckenberg/wasmtime", branch = "no_std3", default-features = false }
+libc = "0.2.161"
+cfg-if = "1.0.0"
 
 [dev-dependencies]
 test-log = "0.2.16"

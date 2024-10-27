@@ -1,8 +1,8 @@
-use crate::guest_memory::{round_usize_up_to_host_pages, MmapVec};
+use crate::mmap_vec::MmapVec;
 use crate::translate::TablePlan;
+use crate::utils::round_usize_up_to_host_pages;
 use crate::vmcontext::{VMFuncRef, VMTableDefinition};
 use crate::TABLE_MAX;
-use core::ops::Deref;
 use core::ptr::NonNull;
 
 #[derive(Debug)]

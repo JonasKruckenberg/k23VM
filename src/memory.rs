@@ -1,4 +1,4 @@
-use crate::guest_memory::Mmap;
+use crate::placeholder::Mmap;
 use crate::translate::MemoryPlan;
 use crate::vmcontext::VMMemoryDefinition;
 use crate::MEMORY_MAX;
@@ -29,18 +29,16 @@ impl Memory {
     ) -> Self {
         let offset_guard_bytes = usize::try_from(plan.offset_guard_size).unwrap();
         // Ensure that our guard regions are multiples of the host page size.
-        let offset_guard_bytes =
-            crate::guest_memory::round_usize_up_to_host_pages(offset_guard_bytes);
+        let offset_guard_bytes = crate::utils::round_usize_up_to_host_pages(offset_guard_bytes);
 
-        let bound_bytes = crate::guest_memory::round_usize_up_to_host_pages(MEMORY_MAX);
+        let bound_bytes = crate::utils::round_usize_up_to_host_pages(MEMORY_MAX);
         let allocation_bytes = bound_bytes.min(actual_maximum_bytes.unwrap_or(usize::MAX));
 
         let request_bytes = allocation_bytes.checked_add(offset_guard_bytes).unwrap();
         let mut mmap = Mmap::with_reserve(request_bytes).unwrap();
 
         if actual_minimum_bytes > 0 {
-            let accessible =
-                crate::guest_memory::round_usize_up_to_host_pages(actual_minimum_bytes);
+            let accessible = crate::utils::round_usize_up_to_host_pages(actual_minimum_bytes);
             mmap.make_accessible(0, accessible).unwrap();
         }
 

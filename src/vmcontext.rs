@@ -1,10 +1,10 @@
-use crate::guest_memory::round_usize_up_to_host_pages;
-use crate::guest_memory::MmapVec;
 use crate::indices::{
     DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex, FuncIndex, FuncRefIndex,
-    GlobalIndex, MemoryIndex, OwnedMemoryIndex, TableIndex, TypeIndex,
+    GlobalIndex, MemoryIndex, TableIndex, TypeIndex,
 };
+use crate::mmap_vec::MmapVec;
 use crate::translate::TranslatedModule;
+use crate::utils::round_usize_up_to_host_pages;
 use core::ffi::c_void;
 use core::marker::PhantomPinned;
 use core::mem::offset_of;
@@ -372,15 +372,25 @@ pub struct VMFuncRef {
     // /// Function signature's type id.
     // pub type_index: VMSharedTypeIndex,
     /// The VM state associated with this function.
-    pub vmctx: *mut VMContext,
+    pub vmctx: *mut VMOpaqueContext,
     pub type_index: TypeIndex,
 }
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct VMFunctionImport {
-    pub from: *mut VMFuncRef,
-    pub vmctx: *mut VMContext,
+    /// Function pointer to use when calling this imported function from Wasm.
+    pub wasm_call: NonNull<VMWasmCallFunction>,
+    /// Function pointer to use when calling this imported function with the
+    /// "array" calling convention that `Func::new` et al use.
+    pub array_call: VMArrayCallFunction,
+    /// The VM state associated with this function.
+    ///
+    /// For Wasm functions defined by core wasm instances this will be `*mut
+    /// VMContext`, but for lifted/lowered component model functions this will
+    /// be a `VMComponentContext`, and for a host function it will be a
+    /// `VMHostFuncContext`, etc.
+    pub vmctx: *mut VMOpaqueContext,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -412,7 +422,7 @@ pub struct VMContextPlan {
     num_imported_globals: u32,
     num_defined_tables: u32,
     num_defined_memories: u32,
-    num_owned_memories: u32,
+    // num_owned_memories: u32,
     num_defined_globals: u32,
     num_escaped_funcs: u32,
     /// target ISA pointer size in bytes
@@ -428,7 +438,6 @@ pub struct VMContextPlan {
     imported_globals: u32,
     tables: u32,
     memories: u32,
-    owned_memories: u32,
     globals: u32,
     func_refs: u32,
     stack_limit: u32,
@@ -456,7 +465,6 @@ impl VMContextPlan {
             num_imported_globals: module.num_imported_globals(),
             num_defined_tables: module.num_defined_tables(),
             num_defined_memories: module.num_defined_memories(),
-            num_owned_memories: module.num_owned_memories(),
             num_defined_globals: module.num_defined_globals(),
             num_escaped_funcs: module.num_escaped_funcs(),
             ptr_size,
@@ -466,9 +474,6 @@ impl VMContextPlan {
             // builtins: member_offset(ptr_size),
             tables: member_offset(size_of_u32::<VMTableDefinition>() * module.num_defined_tables()),
             memories: member_offset(ptr_size * module.num_defined_memories()),
-            owned_memories: member_offset(
-                size_of_u32::<VMMemoryDefinition>() * module.num_owned_memories(),
-            ),
             globals: member_offset(
                 size_of_u32::<VMGlobalDefinition>() * module.num_defined_globals(),
             ),
@@ -506,10 +511,6 @@ impl VMContextPlan {
     #[inline]
     pub fn num_defined_memories(&self) -> u32 {
         self.num_defined_memories
-    }
-    #[inline]
-    pub fn num_owned_memories(&self) -> u32 {
-        self.num_owned_memories
     }
     #[inline]
     pub fn num_defined_globals(&self) -> u32 {
@@ -573,39 +574,27 @@ impl VMContextPlan {
         assert!(index.as_u32() < self.num_defined_tables);
         self.tables + index.as_u32() * size_of_u32::<VMTableDefinition>()
     }
-    /// Returns the offset of the *start* of the `VMContext` `memory_pointers` array.
-    #[inline]
-    pub fn vmctx_memory_pointers_start(&self) -> u32 {
-        self.memories
-    }
-    /// Returns the offset of the `*mut VMMemoryDefinition` given by `index` within `VMContext`s
-    /// `memory_pointers` array.
-    #[inline]
-    pub fn vmctx_memory_pointer(&self, index: DefinedMemoryIndex) -> u32 {
-        assert!(index.as_u32() < self.num_defined_memories);
-        self.memories + index.as_u32() * self.ptr_size
-    }
     /// Returns the offset of the *start* of the `VMContext` `memory_definitions` array.
     #[inline]
     pub fn vmctx_memory_definitions_start(&self) -> u32 {
-        self.owned_memories
+        self.memories
     }
     /// Returns the offset of the `VMMemoryDefinition` given by `index` within `VMContext`s
     /// `memory_definitions` array.
     #[inline]
-    pub fn vmctx_memory_definition(&self, index: OwnedMemoryIndex) -> u32 {
-        assert!(index.as_u32() < self.num_owned_memories);
-        self.owned_memories + index.as_u32() * size_of_u32::<VMMemoryDefinition>()
+    pub fn vmctx_memory_definition(&self, index: DefinedMemoryIndex) -> u32 {
+        assert!(index.as_u32() < self.num_defined_memories);
+        self.memories + index.as_u32() * size_of_u32::<VMMemoryDefinition>()
     }
     /// Return the offset to the `base` field in `VMMemoryDefinition` index `index`.
     #[inline]
-    pub fn vmctx_memory_definition_base(&self, index: OwnedMemoryIndex) -> u32 {
+    pub fn vmctx_memory_definition_base(&self, index: DefinedMemoryIndex) -> u32 {
         self.vmctx_memory_definition(index) + offset_of!(VMMemoryDefinition, base) as u32
     }
 
     /// Return the offset to the `current_length` field in `VMMemoryDefinition` index `index`.
     #[inline]
-    pub fn vmctx_memory_definition_current_length(&self, index: OwnedMemoryIndex) -> u32 {
+    pub fn vmctx_memory_definition_current_length(&self, index: DefinedMemoryIndex) -> u32 {
         self.vmctx_memory_definition(index) + offset_of!(VMMemoryDefinition, current_length) as u32
     }
     /// Returns the offset of the *start* of the `VMContext` `global_definitions` array.
@@ -644,6 +633,16 @@ impl VMContextPlan {
     pub fn vmctx_function_import(&self, index: FuncIndex) -> u32 {
         assert!(index.as_u32() < self.num_imported_funcs);
         self.imported_functions + index.as_u32() * size_of_u32::<VMFunctionImport>()
+    }
+    /// Returns the offset of the `VMFunctionImport`s `vmctx` fields given by `index` within `VMContext`s
+    /// `function_imports` array.
+    pub(crate) fn vmctx_function_import_vmctx(&self, index: FuncIndex) -> u32 {
+        self.vmctx_function_import(index) + offset_of!(VMFunctionImport, vmctx) as u32
+    }
+    /// Returns the offset of the `VMFunctionImport`s `vmctx` fields given by `index` within `VMContext`s
+    /// `function_imports` array.
+    pub(crate) fn vmctx_function_import_wasm_call(&self, index: FuncIndex) -> u32 {
+        self.vmctx_function_import(index) + offset_of!(VMFunctionImport, wasm_call) as u32
     }
     /// Returns the offset of the *start* of the `VMContext` `table_imports` array.
     #[inline]
@@ -708,11 +707,23 @@ impl OwnedVMContext {
         let vec = MmapVec::new_zeroed(round_usize_up_to_host_pages(plan.size() as usize))?;
         Ok(Self(vec))
     }
-    pub(crate) fn as_vmctx(&self) -> *const VMContext {
+    pub(crate) fn as_ptr(&self) -> *const VMContext {
         self.0.as_ptr().cast()
     }
-    pub(crate) fn as_vmctx_mut(&mut self) -> *mut VMContext {
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut VMContext {
         self.0.as_mut_ptr().cast()
+    }
+
+    pub(crate) unsafe fn plus_offset<T>(&self, offset: u32) -> *const T {
+        self.as_ptr()
+            .byte_add(usize::try_from(offset).unwrap())
+            .cast()
+    }
+
+    pub(crate) unsafe fn plus_offset_mut<T>(&mut self, offset: u32) -> *mut T {
+        self.as_mut_ptr()
+            .byte_add(usize::try_from(offset).unwrap())
+            .cast()
     }
 }
 

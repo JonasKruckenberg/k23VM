@@ -6,7 +6,9 @@ use crate::memory::Memory;
 use crate::module::Module;
 use crate::store::{InstanceHandle, Store};
 use crate::table::Table;
-use crate::translate::{MemoryPlan, TableInitialValue, TablePlan, TableSegmentElements};
+use crate::translate::{
+    FunctionType, MemoryPlan, TableInitialValue, TablePlan, TableSegmentElements,
+};
 use crate::vmcontext::{
     OwnedVMContext, VMArrayCallFunction, VMContext, VMContextPlan, VMFuncRef, VMFunctionBody,
     VMFunctionImport, VMGlobalDefinition, VMGlobalImport, VMMemoryDefinition, VMMemoryImport,
@@ -16,28 +18,63 @@ use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::{fmt, mem, slice};
+use core::{fmt, mem, ptr, slice};
 use cranelift_entity::PrimaryMap;
 use serde_derive::{Deserialize, Serialize};
 use tracing::log;
 use wasmparser::GlobalType;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Instance(pub(crate) InstanceHandle);
 
 impl Instance {
-    pub(crate) fn new_internal<'wasm>(
+    pub fn new<'wasm>(
         store: &mut Store<'wasm>,
         alloc: &dyn InstanceAllocator,
-        module: &Module<'wasm>,
         const_eval: &mut ConstExprEvaluator,
-        imports: (),
-    ) -> crate::TranslationResult<Instance> {
-        let handle = store.allocate_module(alloc, module, const_eval)?;
+        module: Module<'wasm>,
+        imports: Imports,
+    ) -> crate::TranslationResult<Self> {
+        let (mut vmctx, mut tables, mut memories) =
+            store.allocate_module(alloc, const_eval, &module)?;
+
+        unsafe {
+            initialize_vmctx(
+                const_eval,
+                &mut vmctx,
+                &mut tables,
+                &mut memories,
+                &module,
+                imports,
+            );
+            initialize_tables(const_eval, &mut tables, &module)?;
+            initialize_memories(const_eval, &mut memories, &module)?;
+        }
+
+        // TODO optionally call start func
+        assert!(
+            module.module().start.is_none(),
+            "start function not supported yet"
+        );
+
+        let handle = store.push_instance(InstanceData {
+            module,
+            memories,
+            tables,
+            vmctx,
+        });
+
         Ok(Self(handle))
     }
 
-    pub(crate) fn get_export(&self, store: &mut Store, name: &str) -> Option<Extern> {
+    pub fn exports<'s, 'wasm>(
+        &self,
+        store: &'s mut Store<'wasm>,
+    ) -> impl Iterator<Item = Export<'wasm>> + use<'s, 'wasm> {
+        store.instance_data_mut(self.0).exports()
+    }
+
+    pub fn get_export(&self, store: &mut Store, name: &str) -> Option<Extern> {
         store.instance_data_mut(self.0).get_export(name)
     }
 
@@ -50,10 +87,10 @@ impl Instance {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 unsafe {
                     f.debug_struct("VMContext")
+                        .field("<vmctx address>", &self.data.vmctx.as_ptr())
                         .field("magic", &self.data.vmctx_magic())
                         .field("tables", &self.data.vmctx_table_definitions())
-                        .field("memories", &self.data.vmctx_memory_pointers())
-                        .field("owned_memories", &self.data.vmctx_memory_definitions())
+                        .field("memories", &self.data.vmctx_memory_definitions())
                         .field("globals", &self.data.vmctx_global_definitions())
                         .field("func_refs", &self.data.vmctx_func_refs())
                         .field("imported_functions", &self.data.vmctx_function_imports())
@@ -80,7 +117,7 @@ impl Instance {
 
 #[derive(Debug)]
 pub(crate) struct InstanceData<'wasm> {
-    module: Module<'wasm>,
+    pub module: Module<'wasm>,
     memories: PrimaryMap<DefinedMemoryIndex, Memory>,
     tables: PrimaryMap<DefinedTableIndex, Table>,
     pub vmctx: OwnedVMContext,
@@ -104,9 +141,9 @@ impl<'wasm> InstanceData<'wasm> {
     fn _get_export(&mut self, index: EntityIndex) -> Extern {
         match index {
             EntityIndex::Function(index) => {
-                let index = self.module.module().functions[index].func_ref;
+                let func_ref = self.module.module().functions[index].func_ref;
                 let ptr: *mut VMFuncRef = unsafe {
-                    self.vmctx_plus_offset_mut(self.module.vmctx_plan().vmctx_func_ref(index))
+                    self.vmctx_plus_offset_mut(self.module.vmctx_plan().vmctx_func_ref(func_ref))
                 };
 
                 Extern::Func(ExportFunction {
@@ -122,7 +159,7 @@ impl<'wasm> InstanceData<'wasm> {
                             self.module.vmctx_plan().vmctx_table_definition(def_index),
                         )
                     };
-                    let vmctx = self.vmctx.as_vmctx_mut();
+                    let vmctx = self.vmctx.as_mut_ptr();
 
                     (definition, vmctx)
                 } else {
@@ -139,8 +176,31 @@ impl<'wasm> InstanceData<'wasm> {
                     table: self.module.module().table_plans[index].to_owned(),
                 })
             }
-            EntityIndex::Memory(_) => {
-                todo!("exported memory")
+            EntityIndex::Memory(index) => {
+                let (definition, vmctx) = if let Some(def_index) =
+                    self.module.module().defined_memory_index(index)
+                {
+                    let definition: *mut VMMemoryDefinition = unsafe {
+                        self.vmctx_plus_offset_mut(
+                            self.module.vmctx_plan().vmctx_memory_definition(def_index),
+                        )
+                    };
+                    let vmctx = self.vmctx.as_mut_ptr();
+
+                    (definition, vmctx)
+                } else {
+                    let import: VMMemoryImport = unsafe {
+                        *self.vmctx_plus_offset(self.module.vmctx_plan().vmctx_memory_import(index))
+                    };
+
+                    (import.from, import.vmctx)
+                };
+
+                Extern::Memory(ExportMemory {
+                    definition,
+                    vmctx,
+                    memory: self.module.module().memory_plans[index].to_owned(),
+                })
             }
             EntityIndex::Global(index) => {
                 let (definition, vmctx) = if let Some(def_index) =
@@ -151,7 +211,7 @@ impl<'wasm> InstanceData<'wasm> {
                             self.module.vmctx_plan().vmctx_global_definition(def_index),
                         )
                     };
-                    let vmctx = self.vmctx.as_vmctx_mut();
+                    let vmctx = self.vmctx.as_mut_ptr();
 
                     (definition, vmctx)
                 } else {
@@ -172,219 +232,12 @@ impl<'wasm> InstanceData<'wasm> {
         }
     }
 
-    pub(crate) fn new(
-        vmctx: OwnedVMContext,
-        tables: PrimaryMap<DefinedTableIndex, Table>,
-        memories: PrimaryMap<DefinedMemoryIndex, Memory>,
-        module: &Module<'wasm>,
-        const_eval: &mut ConstExprEvaluator,
-    ) -> crate::TranslationResult<InstanceData<'wasm>> {
-        let mut this = Self {
-            vmctx,
-            tables,
-            memories,
-            module: module.to_owned(),
-        };
-
-        unsafe {
-            this.initialize_vmctx(const_eval, module);
-            this.initialize_tables(const_eval, module)?;
-            this.initialize_memories(const_eval, module)?;
-        }
-
-        // TODO optionally call start func
-        assert!(
-            module.module().start.is_none(),
-            "start function not supported yet"
-        );
-
-        Ok(this)
-    }
-
-    unsafe fn initialize_vmctx(&mut self, const_eval: &mut ConstExprEvaluator, module: &Module) {
-        let vmctx_plan = module.vmctx_plan();
-        *self.vmctx_plus_offset_mut(vmctx_plan.vmctx_magic()) = VMCONTEXT_MAGIC;
-
-        // TODO init builtins field
-        // TODO Initialize the imports fields
-
-        for (index, signature_index, func_ref_index) in
-            module
-                .module()
-                .functions
-                .iter()
-                .filter_map(|(index, func)| {
-                    func.is_escaping()
-                        .then_some((index, func.signature, func.func_ref))
-                })
-        {
-            let def_index = self
-                .module
-                .module()
-                .defined_func_index(index)
-                .expect("is this even possible?");
-
-            let (array_call, wasm_call) = {
-                let info = &self.module.0.info.funcs[def_index];
-                let code = self.module.0.code.lock();
-
-                let array_call = code.resolve_function_loc(
-                    info.host_to_wasm_trampoline
-                        .expect("escaping function requires trampoline"),
-                );
-                let wasm_call = code.resolve_function_loc(info.wasm_func_loc);
-
-                (array_call, wasm_call)
-            };
-
-            let ptr: *mut VMFuncRef =
-                self.vmctx_plus_offset_mut(vmctx_plan.vmctx_func_ref(func_ref_index));
-            ptr.write(VMFuncRef {
-                array_call: mem::transmute::<usize, VMArrayCallFunction>(array_call),
-                wasm_call: NonNull::new(wasm_call as *mut VMWasmCallFunction).unwrap(),
-                vmctx: self.vmctx.as_vmctx_mut(),
-                type_index: signature_index,
-            })
-        }
-
-        // Initialize the defined tables
-        for def_index in module
-            .module()
-            .table_plans
-            .keys()
-            .filter_map(|index| module.module().defined_table_index(index))
-        {
-            let ptr = self.vmctx_plus_offset_mut::<VMTableDefinition>(
-                vmctx_plan.vmctx_table_definition(def_index),
-            );
-            ptr.write(self.tables[def_index].as_vmtable_definition());
-        }
-
-        // Initialize the defined memories. This fills in both the `defined_memories` table
-        // and the `owned_memories` table at the same time.
-        for (def_index, plan) in module
-            .module()
-            .memory_plans
-            .iter()
-            .filter_map(|(index, plan)| Some((module.module().defined_memory_index(index)?, plan)))
-        {
-            assert!(!plan.shared, "shared memories are not currently supported");
-            let owned_index = module.module().owned_memory_index(def_index);
-
-            let ptr = self.vmctx_plus_offset_mut::<*mut VMMemoryDefinition>(
-                vmctx_plan.vmctx_memory_pointer(def_index),
-            );
-            let owned_ptr = self.vmctx_plus_offset_mut::<VMMemoryDefinition>(
-                vmctx_plan.vmctx_memory_definition(owned_index),
-            );
-
-            owned_ptr.write(self.memories[def_index].as_vmmemory_definition());
-            ptr.write(owned_ptr);
-        }
-
-        self.initialize_vmctx_globals(const_eval, module);
-    }
-
-    unsafe fn initialize_tables(
-        &mut self,
-        const_eval: &mut ConstExprEvaluator,
-        module: &Module,
-    ) -> crate::TranslationResult<()> {
-        // update initial values
-        for (def_index, init) in module.module().table_initializers.initial_values.iter() {
-            let val = match init {
-                TableInitialValue::RefNull => None,
-                TableInitialValue::ConstExpr(expr) => {
-                    let funcref = const_eval.eval(expr)?.get_funcref();
-                    // TODO assert funcref ptr is valid
-                    Some(NonNull::new(funcref.cast()).unwrap())
-                }
-            };
-
-            self.tables[def_index].elements_mut().fill(val);
-        }
-
-        // run active elements
-        for segment in module.module().table_initializers.segments.iter() {
-            let elements: Vec<_> = match &segment.elements {
-                TableSegmentElements::Functions(funcs) => funcs
-                    .iter()
-                    .map(|func_index| todo!("obtain func ref"))
-                    .collect(),
-                TableSegmentElements::Expressions(exprs) => exprs
-                    .iter()
-                    .map(
-                        |expr| -> crate::TranslationResult<Option<NonNull<VMFuncRef>>> {
-                            let funcref = const_eval.eval(expr)?.get_funcref();
-                            // TODO assert funcref ptr is valid
-                            Ok(Some(NonNull::new(funcref.cast()).unwrap()))
-                        },
-                    )
-                    .collect::<Result<Vec<_>, _>>()?,
-            };
-
-            let offset = usize::try_from(const_eval.eval(&segment.offset)?.get_u64()).unwrap();
-
-            if let Some(def_index) = module.module().defined_table_index(segment.table_index) {
-                self.tables[def_index].elements_mut()[offset..offset + elements.len()]
-                    .copy_from_slice(&elements);
-            } else {
-                todo!("initializing imported table")
-            }
-        }
-
-        Ok(())
-    }
-
-    unsafe fn initialize_memories(
-        &mut self,
-        const_eval: &mut ConstExprEvaluator,
-        module: &Module,
-    ) -> crate::TranslationResult<()> {
-        for init in module.module().memory_initializers.iter() {
-            let memory64 = module.module().memory_plans[init.memory_index].memory64;
-
-            let offset = usize::try_from(const_eval.eval(&init.offset)?.get_u64()).unwrap();
-
-            if let Some(def_index) = module.module().defined_memory_index(init.memory_index) {
-                self.memories[def_index].as_slice_mut()[offset..offset + init.bytes.len()]
-                    .copy_from_slice(init.bytes);
-            } else {
-                todo!("initializing imported table")
-            }
-        }
-
-        Ok(())
-    }
-
-    unsafe fn initialize_vmctx_globals(
-        &mut self,
-        const_eval: &mut ConstExprEvaluator,
-        module: &Module,
-    ) -> crate::TranslationResult<()> {
-        for (def_index, init_expr) in module.module().global_initializers.iter() {
-            let val = const_eval.eval(init_expr)?;
-            let ptr = self.vmctx_plus_offset_mut::<VMGlobalDefinition>(
-                module.vmctx_plan().vmctx_global_definition(def_index),
-            );
-            ptr.write(VMGlobalDefinition::from_vmval(val))
-        }
-
-        Ok(())
-    }
-
     unsafe fn vmctx_plus_offset<T>(&self, offset: u32) -> *const T {
-        self.vmctx
-            .as_vmctx()
-            .byte_add(usize::try_from(offset).unwrap())
-            .cast()
+        self.vmctx.plus_offset(offset)
     }
 
     unsafe fn vmctx_plus_offset_mut<T>(&mut self, offset: u32) -> *mut T {
-        self.vmctx
-            .as_vmctx_mut()
-            .byte_add(usize::try_from(offset).unwrap())
-            .cast()
+        self.vmctx.plus_offset_mut(offset)
     }
 
     unsafe fn vmctx_magic(&self) -> u32 {
@@ -416,21 +269,12 @@ impl<'wasm> InstanceData<'wasm> {
         )
     }
 
-    unsafe fn vmctx_memory_pointers(&self) -> &[*mut VMMemoryDefinition] {
-        slice::from_raw_parts(
-            self.vmctx_plus_offset::<*mut VMMemoryDefinition>(
-                self.module.vmctx_plan().vmctx_memory_pointers_start(),
-            ),
-            self.module.vmctx_plan().num_defined_memories() as usize,
-        )
-    }
-
     unsafe fn vmctx_memory_definitions(&self) -> &[VMMemoryDefinition] {
         slice::from_raw_parts(
             self.vmctx_plus_offset::<VMMemoryDefinition>(
                 self.module.vmctx_plan().vmctx_memory_definitions_start(),
             ),
-            self.module.vmctx_plan().num_owned_memories() as usize,
+            self.module.vmctx_plan().num_defined_memories() as usize,
         )
     }
 
@@ -487,6 +331,14 @@ impl<'wasm> InstanceData<'wasm> {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct Imports {
+    pub functions: Vec<VMFunctionImport>,
+    pub tables: Vec<VMTableImport>,
+    pub memories: Vec<VMMemoryImport>,
+    pub globals: Vec<VMGlobalImport>,
+}
+
 #[derive(Clone)]
 pub struct Export<'wasm> {
     pub name: &'wasm str,
@@ -541,8 +393,6 @@ pub struct ExportMemory {
     pub vmctx: *mut VMContext,
     /// The memory declaration, used for compatibility checking.
     pub memory: MemoryPlan,
-    /// The index at which the memory is defined within the `vmctx`.
-    pub index: DefinedMemoryIndex,
 }
 
 /// A global export value.
@@ -555,4 +405,191 @@ pub struct ExportGlobal {
     pub vmctx: *mut VMContext,
     /// The global declaration, used for compatibility checking.
     pub ty: GlobalType,
+}
+
+unsafe fn initialize_vmctx(
+    const_eval: &mut ConstExprEvaluator,
+    vmctx: &mut OwnedVMContext,
+    tables: &mut PrimaryMap<DefinedTableIndex, Table>,
+    memories: &mut PrimaryMap<DefinedMemoryIndex, Memory>,
+    module: &Module,
+    imports: Imports,
+) {
+    let vmctx_plan = module.vmctx_plan();
+    *vmctx.plus_offset_mut(vmctx_plan.vmctx_magic()) = VMCONTEXT_MAGIC;
+
+    // TODO init builtins field
+    ptr::copy_nonoverlapping(
+        imports.functions.as_ptr(),
+        vmctx.plus_offset_mut::<VMFunctionImport>(vmctx_plan.vmctx_function_imports_start()),
+        imports.functions.len(),
+    );
+    ptr::copy_nonoverlapping(
+        imports.tables.as_ptr(),
+        vmctx.plus_offset_mut::<VMTableImport>(vmctx_plan.vmctx_table_imports_start()),
+        imports.tables.len(),
+    );
+    ptr::copy_nonoverlapping(
+        imports.memories.as_ptr(),
+        vmctx.plus_offset_mut::<VMMemoryImport>(vmctx_plan.vmctx_memory_imports_start()),
+        imports.memories.len(),
+    );
+    ptr::copy_nonoverlapping(
+        imports.globals.as_ptr(),
+        vmctx.plus_offset_mut::<VMGlobalImport>(vmctx_plan.vmctx_global_imports_start()),
+        imports.globals.len(),
+    );
+
+    for (index, signature_index, func_ref_index) in
+        module
+            .module()
+            .functions
+            .iter()
+            .filter_map(|(index, func)| {
+                func.is_escaping()
+                    .then_some((index, func.signature, func.func_ref))
+            })
+    {
+        let def_index = module
+            .module()
+            .defined_func_index(index)
+            .expect("is this even possible?");
+
+        let (array_call, wasm_call) = {
+            let info = &module.0.info.funcs[def_index];
+
+            let array_call = module.0.code.resolve_function_loc(
+                info.host_to_wasm_trampoline
+                    .expect("escaping function requires trampoline"),
+            );
+            let wasm_call = module.0.code.resolve_function_loc(info.wasm_func_loc);
+
+            (array_call, wasm_call)
+        };
+
+        let ptr: *mut VMFuncRef = vmctx.plus_offset_mut(vmctx_plan.vmctx_func_ref(func_ref_index));
+        ptr.write(VMFuncRef {
+            array_call: mem::transmute::<usize, VMArrayCallFunction>(array_call),
+            wasm_call: NonNull::new(wasm_call as *mut VMWasmCallFunction).unwrap(),
+            vmctx: vmctx.as_mut_ptr().cast(),
+            type_index: signature_index,
+        })
+    }
+
+    // Initialize the defined tables
+    for def_index in module
+        .module()
+        .table_plans
+        .keys()
+        .filter_map(|index| module.module().defined_table_index(index))
+    {
+        let ptr = vmctx
+            .plus_offset_mut::<VMTableDefinition>(vmctx_plan.vmctx_table_definition(def_index));
+        ptr.write(tables[def_index].as_vmtable_definition());
+    }
+
+    // Initialize the `defined_memories` table.
+    for (def_index, plan) in module
+        .module()
+        .memory_plans
+        .iter()
+        .filter_map(|(index, plan)| Some((module.module().defined_memory_index(index)?, plan)))
+    {
+        assert!(!plan.shared, "shared memories are not currently supported");
+
+        let ptr = vmctx
+            .plus_offset_mut::<VMMemoryDefinition>(vmctx_plan.vmctx_memory_definition(def_index));
+
+        ptr.write(memories[def_index].as_vmmemory_definition());
+    }
+
+    initialize_vmctx_globals(const_eval, vmctx, module);
+}
+
+unsafe fn initialize_vmctx_globals(
+    const_eval: &mut ConstExprEvaluator,
+    vmctx: &mut OwnedVMContext,
+    module: &Module,
+) -> crate::TranslationResult<()> {
+    for (def_index, init_expr) in module.module().global_initializers.iter() {
+        let val = const_eval.eval(init_expr)?;
+        let ptr = vmctx.plus_offset_mut::<VMGlobalDefinition>(
+            module.vmctx_plan().vmctx_global_definition(def_index),
+        );
+        ptr.write(VMGlobalDefinition::from_vmval(val))
+    }
+
+    Ok(())
+}
+
+unsafe fn initialize_tables(
+    const_eval: &mut ConstExprEvaluator,
+    tables: &mut PrimaryMap<DefinedTableIndex, Table>,
+    module: &Module,
+) -> crate::TranslationResult<()> {
+    // update initial values
+    for (def_index, init) in module.module().table_initializers.initial_values.iter() {
+        let val = match init {
+            TableInitialValue::RefNull => None,
+            TableInitialValue::ConstExpr(expr) => {
+                let funcref = const_eval.eval(expr)?.get_funcref();
+                // TODO assert funcref ptr is valid
+                Some(NonNull::new(funcref.cast()).unwrap())
+            }
+        };
+
+        tables[def_index].elements_mut().fill(val);
+    }
+
+    // run active elements
+    for segment in module.module().table_initializers.segments.iter() {
+        let elements: Vec<_> = match &segment.elements {
+            TableSegmentElements::Functions(funcs) => funcs
+                .iter()
+                .map(|func_index| todo!("obtain func ref"))
+                .collect(),
+            TableSegmentElements::Expressions(exprs) => exprs
+                .iter()
+                .map(
+                    |expr| -> crate::TranslationResult<Option<NonNull<VMFuncRef>>> {
+                        let funcref = const_eval.eval(expr)?.get_funcref();
+                        // TODO assert funcref ptr is valid
+                        Ok(Some(NonNull::new(funcref.cast()).unwrap()))
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+
+        let offset = usize::try_from(const_eval.eval(&segment.offset)?.get_u64()).unwrap();
+
+        if let Some(def_index) = module.module().defined_table_index(segment.table_index) {
+            tables[def_index].elements_mut()[offset..offset + elements.len()]
+                .copy_from_slice(&elements);
+        } else {
+            todo!("initializing imported table")
+        }
+    }
+
+    Ok(())
+}
+
+unsafe fn initialize_memories(
+    const_eval: &mut ConstExprEvaluator,
+    memories: &mut PrimaryMap<DefinedMemoryIndex, Memory>,
+    module: &Module,
+) -> crate::TranslationResult<()> {
+    for init in module.module().memory_initializers.iter() {
+        let memory64 = module.module().memory_plans[init.memory_index].memory64;
+
+        let offset = usize::try_from(const_eval.eval(&init.offset)?.get_u64()).unwrap();
+
+        if let Some(def_index) = module.module().defined_memory_index(init.memory_index) {
+            memories[def_index].as_slice_mut()[offset..offset + init.bytes.len()]
+                .copy_from_slice(init.bytes);
+        } else {
+            todo!("initializing imported table")
+        }
+    }
+
+    Ok(())
 }

@@ -2,7 +2,10 @@ use crate::compile::{
     FunctionLoc, ELF_K23_INFO, ELF_K23_TRAPS, ELF_TEXT, ELF_WASM_DATA, ELF_WASM_DWARF,
     ELF_WASM_NAMES,
 };
-use crate::guest_memory::{Mmap, MmapVec};
+use crate::mmap_vec::MmapVec;
+use crate::placeholder::Mmap;
+use crate::trap;
+use crate::trap::{trap_for_offset, Trap};
 use core::ops::Range;
 use core::{fmt, slice};
 use object::{File, Object, ObjectSection};
@@ -84,6 +87,11 @@ impl CodeMemory {
         }
     }
 
+    pub fn symbol_map(&self) -> object::SymbolMap<object::SymbolMapName> {
+        // TODO this is horrible wow
+        File::parse(self.as_slice()).unwrap().symbol_map()
+    }
+
     pub fn publish(&mut self) {
         debug_assert!(!self.published);
         self.published = true;
@@ -92,11 +100,44 @@ impl CodeMemory {
             return;
         }
 
-        unsafe { self.inner.make_executable(0..self.len, true).unwrap() }
+        unsafe {
+            self.inner.make_readonly(0..self.inner.len()).unwrap();
+
+            let text = self.text();
+            // Switch the executable portion from readonly to read/execute.
+            let offset = self.inner.as_ptr() as usize;
+            self.inner
+                .make_executable(self.text.start - offset..self.text.end - offset, true)
+                .expect("unable to make memory executable");
+        }
     }
 
     pub fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.inner.as_ptr(), self.len) }
+    }
+    pub fn text(&self) -> &[u8] {
+        let offset = self.inner.as_ptr() as usize;
+        &self.as_slice()[self.text.start - offset..self.text.end - offset]
+    }
+    pub fn wasm_data(&self) -> &[u8] {
+        let offset = self.inner.as_ptr() as usize;
+        &self.as_slice()[self.wasm_data.start - offset..self.wasm_data.end - offset]
+    }
+    pub fn func_name_data(&self) -> &[u8] {
+        let offset = self.inner.as_ptr() as usize;
+        &self.as_slice()[self.func_name_data.start - offset..self.func_name_data.end - offset]
+    }
+    pub fn trap_data(&self) -> &[u8] {
+        let offset = self.inner.as_ptr() as usize;
+        &self.as_slice()[self.trap_data.start - offset..self.trap_data.end - offset]
+    }
+    pub fn dwarf(&self) -> &[u8] {
+        let offset = self.inner.as_ptr() as usize;
+        &self.as_slice()[self.dwarf.start - offset..self.dwarf.end - offset]
+    }
+    pub fn info(&self) -> &[u8] {
+        let offset = self.inner.as_ptr() as usize;
+        &self.as_slice()[self.info.start - offset..self.info.end - offset]
     }
 
     pub fn resolve_function_loc(&self, func_loc: FunctionLoc) -> usize {
@@ -113,12 +154,16 @@ impl CodeMemory {
 
         addr
     }
+
+    pub fn lookup_trap_code(&self, text_offset: usize) -> Option<Trap> {
+        let text_offset = u32::try_from(text_offset).ok()?;
+        trap_for_offset(self.trap_data(), text_offset)
+    }
 }
 
 impl fmt::Debug for CodeMemory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CodeMemory")
-            // .field("inner", &self.inner.as_ptr_range())
             .field("published", &self.published)
             .field("text", &self.text)
             .field("wasm_data", &self.wasm_data)
