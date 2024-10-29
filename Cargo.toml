@@ -16,6 +16,7 @@ postcard = { version = "1.0.10", default-features = false, features = ["alloc"] 
 serde = { version = "1.0.213", default-features = false }
 serde_derive = { version = "1.0.213", default-features = false }
 rustix = { version = "0.38.37", default-features = false, features = ["mm"] }
+libc = "0.2.161"
 
 # cranelift dependencies
 hashbrown = { version = "0.15", default-features = false, features = [
@@ -36,6 +37,9 @@ cranelift-frontend = { git = "https://github.com/JonasKruckenberg/wasmtime", bra
 cranelift-entity = { git = "https://github.com/JonasKruckenberg/wasmtime", branch = "no_std3", default-features = false }
 libc = "0.2.161"
 cfg-if = "1.0.0"
+
+[build-dependencies]
+bindgen = "0.70.1"
 
 [dev-dependencies]
 test-log = "0.2.16"
