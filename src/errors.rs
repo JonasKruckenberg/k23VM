@@ -1,6 +1,7 @@
 use crate::traps::{Trap, WasmBacktrace};
 use alloc::string::{String, ToString};
 use core::fmt;
+use cranelift_codegen::CodegenError;
 
 #[derive(Debug)]
 pub enum Error {
@@ -17,7 +18,7 @@ pub enum Error {
     /// Failed to compile a function.
     Cranelift {
         func_name: String,
-        error: cranelift_codegen::CodegenError,
+        message: String,
     },
     /// Failed to parse DWARF debug information.
     Gimli(gimli::Error),
@@ -44,7 +45,15 @@ impl From<cranelift_codegen::CompileError<'_>> for Error {
     fn from(e: cranelift_codegen::CompileError<'_>) -> Self {
         Self::Cranelift {
             func_name: e.func.name.to_string(),
-            error: e.inner,
+            message: match e.inner {
+                CodegenError::Verifier(errs) => format!("Verifier errors {errs}"),
+                CodegenError::ImplLimitExceeded => "Implementation limit exceeded".to_string(),
+                CodegenError::CodeTooLarge => "Code for function is too large".to_string(),
+                CodegenError::Unsupported(feature) => format!("Unsupported feature: {feature}"),
+                CodegenError::Regalloc(errors) => format!("Regalloc validation errors: {errors:?}"),
+                CodegenError::Pcc(e) => format!("Proof-carrying-code validation error: {e:?}"),
+                CodegenError::RegisterMappingError(e) => format!("Register mapping error {e}"),
+            },
         }
     }
 }
@@ -61,8 +70,8 @@ impl fmt::Display for Error {
             Error::InvalidWebAssembly { message, offset } => {
                 f.write_fmt(format_args!("invalid WASM input at {offset}: {message}"))
             }
-            Error::Cranelift { func_name, error } => f.write_fmt(format_args!(
-                "failed to compile function {func_name}: {error}"
+            Error::Cranelift { func_name, message } => f.write_fmt(format_args!(
+                "failed to compile function {func_name}: {message}"
             )),
             Error::Unsupported(feature) => f.write_fmt(format_args!(
                 "Feature used by the WebAssembly code is not supported: {feature}"
