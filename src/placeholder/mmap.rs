@@ -1,9 +1,9 @@
 use crate::utils::usize_is_multiple_of_host_page_size;
+use core::ops::Range;
+use core::ptr;
+use core::ptr::NonNull;
 use core::slice;
 use rustix::mm::MprotectFlags;
-use std::ops::Range;
-use std::ptr;
-use std::ptr::NonNull;
 
 #[derive(Debug)]
 pub struct Mmap {
@@ -21,7 +21,7 @@ impl Mmap {
         }
     }
 
-    pub fn new(size: usize) -> crate::TranslationResult<Self> {
+    pub fn new(size: usize) -> crate::Result<Self> {
         assert!(usize_is_multiple_of_host_page_size(size));
         let ptr = unsafe {
             rustix::mm::mmap_anonymous(
@@ -37,8 +37,9 @@ impl Mmap {
         Ok(Mmap { memory })
     }
 
-    pub fn with_reserve(size: usize) -> crate::TranslationResult<Self> {
+    pub fn with_reserve(size: usize) -> crate::Result<Self> {
         assert!(usize_is_multiple_of_host_page_size(size));
+        assert!(size > 0);
         let ptr = unsafe {
             rustix::mm::mmap_anonymous(
                 ptr::null_mut(),
@@ -84,7 +85,7 @@ impl Mmap {
         self.len() == 0
     }
 
-    pub fn make_accessible(&mut self, start: usize, len: usize) -> crate::TranslationResult<()> {
+    pub fn make_accessible(&mut self, start: usize, len: usize) -> crate::Result<()> {
         let ptr = self.memory.as_ptr();
         assert!(start + len <= self.memory.len());
         assert!(unsafe {
@@ -112,7 +113,7 @@ impl Mmap {
         &self,
         range: Range<usize>,
         enable_branch_protection: bool,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         assert!(range.start <= self.len());
         assert!(range.end <= self.len());
         assert!(range.start <= range.end);
@@ -145,7 +146,7 @@ impl Mmap {
         Ok(())
     }
 
-    pub unsafe fn make_readonly(&self, range: Range<usize>) -> crate::TranslationResult<()> {
+    pub unsafe fn make_readonly(&self, range: Range<usize>) -> crate::Result<()> {
         assert!(range.start <= self.len());
         assert!(range.end <= self.len());
         assert!(range.start <= range.end);

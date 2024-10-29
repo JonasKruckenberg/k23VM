@@ -1,7 +1,6 @@
-use crate::translate::{ConstExpr, ConstOp};
-use crate::vmcontext::VMVal;
+use crate::parse::{ConstExpr, ConstOp};
+use crate::vm::VMVal;
 use smallvec::SmallVec;
-use wasmparser::Operator;
 
 #[derive(Debug, Default)]
 pub struct ConstExprEvaluator {
@@ -9,7 +8,7 @@ pub struct ConstExprEvaluator {
 }
 
 impl ConstExprEvaluator {
-    pub fn eval(&mut self, expr: &ConstExpr) -> crate::TranslationResult<VMVal> {
+    pub fn eval(&mut self, expr: &ConstExpr) -> crate::Result<VMVal> {
         for op in expr.ops() {
             match op {
                 ConstOp::I32Const(value) => self.push(VMVal::i32(value)),

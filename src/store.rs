@@ -1,86 +1,137 @@
-use crate::const_eval::ConstExprEvaluator;
-use crate::indices::{DefinedMemoryIndex, DefinedTableIndex};
-use crate::instance::InstanceData;
-use crate::instance_allocator::InstanceAllocator;
-use crate::memory::Memory;
-use crate::module::Module;
-use crate::table::Table;
-use crate::translate::{TableInitialValue, TableSegmentElements, TranslatedModule};
-use crate::vmcontext::{
-    OwnedVMContext, VMContext, VMFuncRef, VMGlobalDefinition, VMMemoryDefinition,
-    VMTableDefinition, VMVal, VMCONTEXT_MAGIC,
-};
+use crate::vm::{self, VMContext, VMVal};
 use alloc::vec::Vec;
-use core::ptr::NonNull;
-use core::{mem, ptr};
-use cranelift_entity::PrimaryMap;
+use core::fmt;
+use core::marker::PhantomData;
+use core::ops::{Index, IndexMut};
 use hashbrown::HashMap;
-use serde_derive::{Deserialize, Serialize};
+use std::mem;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct InstanceHandle(usize);
-
-#[derive(Default)]
-pub struct Store<'wasm> {
-    instances: Vec<InstanceData<'wasm>>,
+#[derive(Debug, Default)]
+pub struct Store {
+    instances: Vec<vm::Instance>,
+    vmctx2instance: HashMap<*mut VMContext, Stored<vm::Instance>>,
+    exported_funcs: Vec<vm::ExportedFunction>,
+    exported_tables: Vec<vm::ExportedTable>,
+    exported_memories: Vec<vm::ExportedMemory>,
+    exported_globals: Vec<vm::ExportedGlobal>,
     wasm_vmval_storage: Vec<VMVal>,
-    pub(crate) vmctx2instance: HashMap<NonNull<VMContext>, InstanceHandle>,
 }
 
-unsafe impl Send for Store<'_> {}
-unsafe impl Sync for Store<'_> {}
-
-impl<'wasm> Store<'wasm> {
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn allocate_module(
-        &mut self,
-        alloc: &dyn InstanceAllocator,
-        const_eval: &mut ConstExprEvaluator,
-        module: &Module<'wasm>,
-    ) -> crate::TranslationResult<(
-        OwnedVMContext,
-        PrimaryMap<DefinedTableIndex, Table>,
-        PrimaryMap<DefinedMemoryIndex, Memory>,
-    )> {
-        let num_defined_memories =
-            module.module().memory_plans.len() - module.module().num_imported_memories as usize;
-        let mut memories = PrimaryMap::with_capacity(num_defined_memories);
-
-        let num_defined_tables =
-            module.module().table_plans.len() - module.module().num_imported_tables as usize;
-        let mut tables = PrimaryMap::with_capacity(num_defined_tables);
-
-        match (|| unsafe {
-            alloc.allocate_memories(module.module(), &mut memories)?;
-            alloc.allocate_tables(module.module(), &mut tables)?;
-            alloc.allocate_vmctx(module.module(), module.vmctx_plan())
-        })() {
-            Ok(vmctx) => Ok((vmctx, tables, memories)),
-            Err(e) => Err(e),
-        }
+impl Store {
+    pub(crate) fn vmctx2instance(&self, vmctx: *mut VMContext) -> Stored<vm::Instance> {
+        self.vmctx2instance[&vmctx]
     }
-    pub(crate) fn push_instance(
-        &mut self,
-        mut instance_data: InstanceData<'wasm>,
-    ) -> InstanceHandle {
-        let handle = InstanceHandle(self.instances.len());
-        self.vmctx2instance.insert(
-            NonNull::new(instance_data.vmctx.as_mut_ptr()).unwrap(),
-            handle,
-        );
-        self.instances.push(instance_data);
+    pub(crate) fn push_instance(&mut self, mut instance: vm::Instance) -> Stored<vm::Instance> {
+        let handle = Stored {
+            index: self.instances.len(),
+            _m: PhantomData,
+        };
+        self.vmctx2instance
+            .insert(instance.vmctx.as_mut_ptr(), handle);
+        self.instances.push(instance);
         handle
     }
-    pub(crate) fn instance_data(&self, handle: InstanceHandle) -> &InstanceData<'wasm> {
-        &self.instances[handle.0]
+    pub(crate) fn push_exported_function(
+        &mut self,
+        export: vm::ExportedFunction,
+    ) -> Stored<vm::ExportedFunction> {
+        let handle = Stored {
+            index: self.exported_funcs.len(),
+            _m: PhantomData,
+        };
+        self.exported_funcs.push(export);
+        handle
     }
-    pub(crate) fn instance_data_mut(&mut self, handle: InstanceHandle) -> &mut InstanceData<'wasm> {
-        &mut self.instances[handle.0]
+    pub(crate) fn push_exported_table(
+        &mut self,
+        export: vm::ExportedTable,
+    ) -> Stored<vm::ExportedTable> {
+        let handle = Stored {
+            index: self.exported_tables.len(),
+            _m: PhantomData,
+        };
+        self.exported_tables.push(export);
+        handle
+    }
+    pub(crate) fn push_exported_memory(
+        &mut self,
+        export: vm::ExportedMemory,
+    ) -> Stored<vm::ExportedMemory> {
+        let handle = Stored {
+            index: self.exported_memories.len(),
+            _m: PhantomData,
+        };
+        self.exported_memories.push(export);
+        handle
+    }
+    pub(crate) fn push_exported_global(
+        &mut self,
+        export: vm::ExportedGlobal,
+    ) -> Stored<vm::ExportedGlobal> {
+        let handle = Stored {
+            index: self.exported_globals.len(),
+            _m: PhantomData,
+        };
+        self.exported_globals.push(export);
+        handle
     }
     pub(crate) fn take_wasm_vmval_storage(&mut self) -> Vec<VMVal> {
         mem::take(&mut self.wasm_vmval_storage)
     }
-    pub(crate) fn return_wasm_vmval_storage(&mut self, vec: Vec<VMVal>) {
-        self.wasm_vmval_storage = vec;
+    pub(crate) fn return_wasm_vmval_storage(&mut self, storage: Vec<VMVal>) {
+        self.wasm_vmval_storage = storage;
+    }
+}
+
+macro_rules! stored_impls {
+    ($bind:ident, $(($ty:path, $field:expr))*) => {
+        $(
+            impl Index<Stored<$ty>> for Store {
+                type Output = $ty;
+
+                fn index(&self, index: Stored<$ty>) -> &Self::Output {
+                    let $bind = self;
+                    &$field[index.index]
+                }
+            }
+
+            impl IndexMut<Stored<$ty>> for Store {
+                fn index_mut(&mut self, index: Stored<$ty>) -> &mut Self::Output {
+                    let $bind = self;
+                    &mut $field[index.index]
+                }
+            }
+        )*
+    };
+}
+
+stored_impls! {
+    s,
+    (vm::Instance, s.instances)
+    (vm::ExportedFunction, s.exported_funcs)
+    (vm::ExportedTable, s.exported_tables)
+    (vm::ExportedMemory, s.exported_memories)
+    (vm::ExportedGlobal, s.exported_globals)
+}
+
+pub struct Stored<T> {
+    index: usize,
+    _m: PhantomData<T>,
+}
+
+impl<T> Clone for Stored<T> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            _m: PhantomData,
+        }
+    }
+}
+
+impl<T> Copy for Stored<T> {}
+
+impl<T> fmt::Debug for Stored<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Stored").field(&self.index).finish()
     }
 }

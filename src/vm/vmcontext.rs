@@ -1,10 +1,49 @@
+//! `VMContext` and other data structures that are directly access by JIT code.
+//!
+//! As a naming convention all types that start with `VM` are types that are used by the JIT code.
+//! All of which are marked as `#[repr(C)]` to have a stable ABI.
+//!
+//! # Safety
+//!
+//! It shouldn't have to be said, but since all structs in this module are exposed to JIT code
+//! **accessing them is highly unsafe**. All methods exposed by these types are marked unsafe for
+//! a reason, and you should **never** use access them as-is in kernel code. Especially pointers read
+//! from these structs should be checked and validated before being dereferenced.
+//!
+//! # [`VMContext`]
+//!
+//! The major data structure that is passed to all JIT-compiled functions. It contains all the
+//! guest-side state that the JIT code needs to access, including globals, table pointers,
+//! memory pointers, and other bits of runtime info. For more details see [`VMContext`].
+//!
+//! This is essentially the guest-side counterpart to the [`crate::vm::instance::Instance`] struct.
+//!
+//! ```rust,ignore
+//! struct VMContext {
+//!     magic: u32,
+//!     _padding: u32, // (On 64-bit systems)
+//!     builtin_functions: *mut VMBuiltinFunctionsArray,
+//!     last_wasm_exit_fp: u32,
+//!     last_wasm_exit_pc: u32,
+//!     last_wasm_entry_sp: u32,
+//!     imported_functions: [VMFunctionImport; module.num_imported_functions],
+//!     imported_tables: [VMTableImport; module.num_imported_tables],
+//!     imported_memories: [VMMemoryImport; module.num_imported_memories],
+//!     imported_globals: [VMGlobalImport; module.num_imported_globals],
+//!     func_refs: [VMFuncRef; module.num_escaped_funcs],
+//!     tables: [VMTableDefinition; module.num_defined_tables],
+//!     memories: [VMMemoryDefinition; module.num_defined_memories],
+//!     globals: [VMGlobalDefinition; module.num_defined_globals],
+//! }
+//! ```
+
 use crate::indices::{
     DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex, FuncIndex, FuncRefIndex,
     GlobalIndex, MemoryIndex, TableIndex, TypeIndex,
 };
-use crate::mmap_vec::MmapVec;
-use crate::translate::TranslatedModule;
+use crate::parse::ParsedModule;
 use crate::utils::round_usize_up_to_host_pages;
+use crate::vm::MmapVec;
 use core::ffi::c_void;
 use core::marker::PhantomPinned;
 use core::mem::offset_of;
@@ -17,40 +56,6 @@ use cranelift_entity::Unsigned;
 use wasmparser::ValType;
 
 pub const VMCONTEXT_MAGIC: u32 = u32::from_le_bytes(*b"vmcx");
-
-#[derive(Debug)]
-#[repr(C, align(16))] // align 16 since globals are aligned to that and contained inside
-pub struct VMContext {
-    _m: PhantomPinned,
-}
-
-/// An "opaque" version of `VMContext` which must be explicitly casted to a
-/// target context.
-///
-/// This context is used to represent that contexts specified in
-/// `VMFuncRef` can have any type and don't have an implicit
-/// structure. Neither wasmtime nor cranelift-generated code can rely on the
-/// structure of an opaque context in general and only the code which configured
-/// the context is able to rely on a particular structure. This is because the
-/// context pointer configured for `VMFuncRef` is guaranteed to be
-/// the first parameter passed.
-///
-/// Note that Wasmtime currently has a layout where all contexts that are casted
-/// to an opaque context start with a 32-bit "magic" which can be used in debug
-/// mode to debug-assert that the casts here are correct and have at least a
-/// little protection against incorrect casts.
-pub struct VMOpaqueContext {
-    pub(crate) magic: u32,
-    _marker: PhantomPinned,
-}
-
-impl VMOpaqueContext {
-    /// Helper function to clearly indicate that casts are desired.
-    #[inline]
-    pub fn from_vmcontext(ptr: *mut VMContext) -> *mut VMOpaqueContext {
-        ptr.cast()
-    }
-}
 
 /// A function pointer that exposes the array calling convention.
 ///
@@ -117,7 +122,7 @@ impl PartialEq for VMVal {
 impl VMVal {
     #[inline]
     pub fn i32(i: i32) -> VMVal {
-        VMVal { i32: i.to_le() }
+        VMVal::i64(i as i64)
     }
     #[inline]
     pub fn i64(i: i64) -> VMVal {
@@ -125,7 +130,7 @@ impl VMVal {
     }
     #[inline]
     pub fn u32(i: u32) -> VMVal {
-        VMVal::i32(i as i32)
+        VMVal::u64(i as u64)
     }
     #[inline]
     pub fn u64(i: u64) -> VMVal {
@@ -365,7 +370,7 @@ impl VMGlobalDefinition {
 pub struct VMFuncRef {
     /// Function pointer for this funcref if being called via the "array"
     /// calling convention that `Func::new` et al use.
-    pub array_call: VMArrayCallFunction,
+    pub host_call: VMArrayCallFunction,
     /// Function pointer for this funcref if being called via the calling
     /// convention we use when compiling Wasm.
     pub wasm_call: NonNull<VMWasmCallFunction>,
@@ -383,7 +388,7 @@ pub struct VMFunctionImport {
     pub wasm_call: NonNull<VMWasmCallFunction>,
     /// Function pointer to use when calling this imported function with the
     /// "array" calling convention that `Func::new` et al use.
-    pub array_call: VMArrayCallFunction,
+    pub host_call: VMArrayCallFunction,
     /// The VM state associated with this function.
     ///
     /// For Wasm functions defined by core wasm instances this will be `*mut
@@ -414,6 +419,209 @@ pub struct VMGlobalImport {
     pub vmctx: *mut VMContext,
 }
 
+/// The VM "context", which holds guest-side instance state such as
+/// globals, table pointers, memory pointers and other runtime information.
+///
+/// This struct is empty since the size of fields within `VMContext` is dynamic and
+/// therefore can't be described by Rust's type system. The exact shape of an instances `VMContext`
+/// is described by its `VMContextPlan` which lets you convert entity indices into `VMContext`-relative
+/// offset for use in JIT code. For a higher-level access to these fields see the `Instance` methods.
+#[derive(Debug)]
+#[repr(C, align(16))] // align 16 since globals are aligned to that and contained inside
+pub struct VMContext {
+    _m: PhantomPinned,
+}
+
+impl VMContext {
+    /// Helper function to cast between context types using a debug assertion to
+    /// protect against some mistakes.
+    #[inline]
+    pub unsafe fn from_opaque(opaque: *mut VMOpaqueContext) -> *mut VMContext {
+        // Note that in general the offset of the "magic" field is stored in
+        // `VMOffsets::vmctx_magic`. Given though that this is a sanity check
+        // about converting this pointer to another type we ideally don't want
+        // to read the offset from potentially corrupt memory. Instead it would
+        // be better to catch errors here as soon as possible.
+        //
+        // To accomplish this the `VMContext` structure is laid out with the
+        // magic field at a statically known offset (here it's 0 for now). This
+        // static offset is asserted in `VMOffsets::from` and needs to be kept
+        // in sync with this line for this debug assertion to work.
+        //
+        // Also note that this magic is only ever invalid in the presence of
+        // bugs, meaning we don't actually read the magic and act differently
+        // at runtime depending what it is, so this is a debug assertion as
+        // opposed to a regular assertion.
+        debug_assert_eq!((*opaque).magic, VMCONTEXT_MAGIC);
+        opaque.cast()
+    }
+}
+
+/// An "opaque" version of `VMContext` which must be explicitly casted to a
+/// target context.
+///
+/// This context is used to represent that contexts specified in
+/// `VMFuncRef` can have any type and don't have an implicit
+/// structure. Neither wasmtime nor cranelift-generated code can rely on the
+/// structure of an opaque context in general and only the code which configured
+/// the context is able to rely on a particular structure. This is because the
+/// context pointer configured for `VMFuncRef` is guaranteed to be
+/// the first parameter passed.
+///
+/// Note that Wasmtime currently has a layout where all contexts that are casted
+/// to an opaque context start with a 32-bit "magic" which can be used in debug
+/// mode to debug-assert that the casts here are correct and have at least a
+/// little protection against incorrect casts.
+#[derive(Debug)]
+#[repr(C, align(16))]
+pub struct VMOpaqueContext {
+    pub(crate) magic: u32,
+    _marker: PhantomPinned,
+}
+
+impl VMOpaqueContext {
+    /// Helper function to clearly indicate that casts are desired.
+    #[inline]
+    pub fn from_vmcontext(ptr: *mut VMContext) -> *mut VMOpaqueContext {
+        ptr.cast()
+    }
+}
+
+#[derive(Debug)]
+pub struct OwnedVMContext(MmapVec<u8>);
+
+impl OwnedVMContext {
+    pub(crate) fn try_new(plan: &VMContextPlan) -> crate::Result<Self> {
+        let vec = MmapVec::new_zeroed(round_usize_up_to_host_pages(plan.size() as usize))?;
+        Ok(Self(vec))
+    }
+    pub(crate) fn as_ptr(&self) -> *const VMContext {
+        self.0.as_ptr().cast()
+    }
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut VMContext {
+        self.0.as_mut_ptr().cast()
+    }
+
+    pub(crate) unsafe fn plus_offset<T>(&self, offset: u32) -> *const T {
+        self.as_ptr()
+            .byte_add(usize::try_from(offset).unwrap())
+            .cast()
+    }
+
+    pub(crate) unsafe fn plus_offset_mut<T>(&mut self, offset: u32) -> *mut T {
+        self.as_mut_ptr()
+            .byte_add(usize::try_from(offset).unwrap())
+            .cast()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FixedVMContextPlan {
+    magic: u32,
+    builtin_functions: u32,
+    /// The current stack limit.
+    /// TODO clarify what this means
+    pub stack_limit: u32,
+
+    /// The value of the frame pointer register when we last called from Wasm to
+    /// the host.
+    ///
+    /// Maintained by our Wasm-to-host trampoline, and cleared just before
+    /// calling into Wasm in `catch_traps`.
+    ///
+    /// This member is `0` when Wasm is actively running and has not called out
+    /// to the host.
+    ///
+    /// Used to find the start of a contiguous sequence of Wasm frames when
+    /// walking the stack.
+    pub last_wasm_exit_fp: u32,
+
+    /// The last Wasm program counter before we called from Wasm to the host.
+    ///
+    /// Maintained by our Wasm-to-host trampoline, and cleared just before
+    /// calling into Wasm in `catch_traps`.
+    ///
+    /// This member is `0` when Wasm is actively running and has not called out
+    /// to the host.
+    ///
+    /// Used when walking a contiguous sequence of Wasm frames.
+    pub last_wasm_exit_pc: u32,
+
+    /// The last host stack pointer before we called into Wasm from the host.
+    ///
+    /// Maintained by our host-to-Wasm trampoline, and cleared just before
+    /// calling into Wasm in `catch_traps`.
+    ///
+    /// This member is `0` when Wasm is actively running and has not called out
+    /// to the host.
+    ///
+    /// When a host function is wrapped into a `wasmtime::Func`, and is then
+    /// called from the host, then this member has the sentinel value of `-1 as
+    /// usize`, meaning that this contiguous sequence of Wasm frames is the
+    /// empty sequence, and it is not safe to dereference the
+    /// `last_wasm_exit_fp`.
+    ///
+    /// Used to find the end of a contiguous sequence of Wasm frames when
+    /// walking the stack.
+    pub last_wasm_entry_fp: u32,
+
+    size: u32,
+}
+
+impl FixedVMContextPlan {
+    pub fn new(isa: &dyn TargetIsa) -> Self {
+        let ptr_size = u32::from(isa.pointer_bytes());
+
+        let mut offset = 0;
+        let mut member_offset = |size_of_member: u32| -> u32 {
+            let out = offset;
+            offset += size_of_member;
+            out
+        };
+
+        Self {
+            magic: member_offset(ptr_size),
+            builtin_functions: member_offset(ptr_size),
+            stack_limit: member_offset(ptr_size),
+            last_wasm_exit_fp: member_offset(ptr_size),
+            last_wasm_exit_pc: member_offset(ptr_size),
+            last_wasm_entry_fp: member_offset(ptr_size),
+            size: offset,
+        }
+    }
+
+    /// Returns the offset of the `VMContext`s `magic` field.
+    #[inline]
+    pub fn vmctx_magic(&self) -> u32 {
+        self.magic
+    }
+    /// Returns the offset of the `VMContext`s `builtin_functions` field.
+    #[inline]
+    pub fn vmctx_builtin_functions(&self) -> u32 {
+        self.builtin_functions
+    }
+    /// Returns the offset of the `VMContext`s `last_wasm_exit_fp` field.
+    #[inline]
+    pub fn vmctx_stack_limit(&self) -> u32 {
+        self.stack_limit
+    }
+    /// Returns the offset of the `VMContext`s `last_wasm_exit_fp` field.
+    #[inline]
+    pub fn vmctx_last_wasm_exit_fp(&self) -> u32 {
+        self.last_wasm_exit_fp
+    }
+    /// Returns the offset of the `VMContext`s `last_wasm_exit_pc` field.
+    #[inline]
+    pub fn vmctx_last_wasm_exit_pc(&self) -> u32 {
+        self.last_wasm_exit_pc
+    }
+    /// Returns the offset of the `VMContext`s `last_wasm_entry_fp` field.
+    #[inline]
+    pub fn vmctx_last_wasm_entry_fp(&self) -> u32 {
+        self.last_wasm_entry_fp
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VMContextPlan {
     num_imported_funcs: u32,
@@ -422,16 +630,15 @@ pub struct VMContextPlan {
     num_imported_globals: u32,
     num_defined_tables: u32,
     num_defined_memories: u32,
-    // num_owned_memories: u32,
     num_defined_globals: u32,
     num_escaped_funcs: u32,
     /// target ISA pointer size in bytes
-    ptr_size: u32,
+    // ptr_size: u32,
     size: u32,
 
     // offsets
-    magic: u32,
-    // builtins: u32,
+    pub fixed: FixedVMContextPlan,
+    func_refs: u32,
     imported_functions: u32,
     imported_tables: u32,
     imported_memories: u32,
@@ -439,24 +646,19 @@ pub struct VMContextPlan {
     tables: u32,
     memories: u32,
     globals: u32,
-    func_refs: u32,
-    stack_limit: u32,
-    last_wasm_exit_fp: u32,
-    last_wasm_exit_pc: u32,
-    last_wasm_entry_sp: u32,
 }
 
 impl VMContextPlan {
-    pub fn for_module(isa: &dyn TargetIsa, module: &TranslatedModule) -> Self {
-        let mut offset = 0;
+    pub fn for_module(isa: &dyn TargetIsa, module: &ParsedModule) -> Self {
+        let ptr_size = u32::from(isa.pointer_bytes());
+        let fixed = FixedVMContextPlan::new(isa);
 
+        let mut offset = fixed.size;
         let mut member_offset = |size_of_member: u32| -> u32 {
             let out = offset;
             offset += size_of_member;
             out
         };
-
-        let ptr_size = u32::from(isa.pointer_bytes());
 
         Self {
             num_imported_funcs: module.num_imported_functions(),
@@ -467,16 +669,9 @@ impl VMContextPlan {
             num_defined_memories: module.num_defined_memories(),
             num_defined_globals: module.num_defined_globals(),
             num_escaped_funcs: module.num_escaped_funcs(),
-            ptr_size,
 
             // offsets
-            magic: member_offset(ptr_size),
-            // builtins: member_offset(ptr_size),
-            tables: member_offset(size_of_u32::<VMTableDefinition>() * module.num_defined_tables()),
-            memories: member_offset(ptr_size * module.num_defined_memories()),
-            globals: member_offset(
-                size_of_u32::<VMGlobalDefinition>() * module.num_defined_globals(),
-            ),
+            fixed,
             func_refs: member_offset(size_of_u32::<VMFuncRef>() * module.num_escaped_funcs()),
             imported_functions: member_offset(
                 size_of_u32::<VMFunctionImport>() * module.num_imported_functions(),
@@ -490,10 +685,11 @@ impl VMContextPlan {
             imported_globals: member_offset(
                 size_of_u32::<VMGlobalImport>() * module.num_imported_globals(),
             ),
-            stack_limit: member_offset(ptr_size),
-            last_wasm_exit_fp: member_offset(ptr_size),
-            last_wasm_exit_pc: member_offset(ptr_size),
-            last_wasm_entry_sp: member_offset(ptr_size),
+            tables: member_offset(size_of_u32::<VMTableDefinition>() * module.num_defined_tables()),
+            memories: member_offset(ptr_size * module.num_defined_memories()),
+            globals: member_offset(
+                size_of_u32::<VMGlobalDefinition>() * module.num_defined_globals(),
+            ),
 
             size: offset,
         }
@@ -503,7 +699,6 @@ impl VMContextPlan {
     pub fn size(&self) -> u32 {
         self.size
     }
-
     #[inline]
     pub fn num_defined_tables(&self) -> u32 {
         self.num_defined_tables
@@ -537,31 +732,6 @@ impl VMContextPlan {
         self.num_imported_globals
     }
 
-    /// Returns the offset of the `VMContext`s `magic` field.
-    #[inline]
-    pub fn vmctx_magic(&self) -> u32 {
-        self.magic
-    }
-    /// Returns the offset of the `VMContext`s `stack_limit` field.
-    #[inline]
-    pub fn vmctx_stack_limit(&self) -> u32 {
-        self.stack_limit
-    }
-    /// Returns the offset of the `VMContext`s `last_wasm_exit_fp` field.
-    #[inline]
-    pub fn vmctx_last_wasm_exit_fp(&self) -> u32 {
-        self.last_wasm_exit_fp
-    }
-    /// Returns the offset of the `VMContext`s `last_wasm_exit_pc` field.
-    #[inline]
-    pub fn vmctx_last_wasm_exit_pc(&self) -> u32 {
-        self.last_wasm_exit_pc
-    }
-    /// Returns the offset of the `VMContext`s `last_wasm_entry_sp` field.
-    #[inline]
-    pub fn vmctx_last_wasm_entry_sp(&self) -> u32 {
-        self.last_wasm_entry_sp
-    }
     /// Returns the offset of the *start* of the `VMContext` `table_definitions` array.
     #[inline]
     pub fn vmctx_table_definitions_start(&self) -> u32 {
@@ -696,34 +866,6 @@ impl VMContextPlan {
     #[inline]
     pub fn vmctx_memory_definition_base_offset(&self) -> u8 {
         u8::try_from(offset_of!(VMMemoryDefinition, base)).unwrap()
-    }
-}
-
-#[derive(Debug)]
-pub struct OwnedVMContext(MmapVec<u8>);
-
-impl OwnedVMContext {
-    pub(crate) fn try_new(plan: &VMContextPlan) -> crate::TranslationResult<Self> {
-        let vec = MmapVec::new_zeroed(round_usize_up_to_host_pages(plan.size() as usize))?;
-        Ok(Self(vec))
-    }
-    pub(crate) fn as_ptr(&self) -> *const VMContext {
-        self.0.as_ptr().cast()
-    }
-    pub(crate) fn as_mut_ptr(&mut self) -> *mut VMContext {
-        self.0.as_mut_ptr().cast()
-    }
-
-    pub(crate) unsafe fn plus_offset<T>(&self, offset: u32) -> *const T {
-        self.as_ptr()
-            .byte_add(usize::try_from(offset).unwrap())
-            .cast()
-    }
-
-    pub(crate) unsafe fn plus_offset_mut<T>(&mut self, offset: u32) -> *mut T {
-        self.as_mut_ptr()
-            .byte_add(usize::try_from(offset).unwrap())
-            .cast()
     }
 }
 

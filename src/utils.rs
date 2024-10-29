@@ -1,9 +1,8 @@
-use core::alloc::Allocator;
-use core::hash::{BuildHasher, Hash};
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature, Type};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use wasmparser::{FuncType, ValType};
+
 #[macro_export]
 macro_rules! enum_accessors {
     ($bind:ident $(($variant:ident($ty:ty) $get:ident $unwrap:ident $cvt:expr))*) => ($(
@@ -31,17 +30,20 @@ macro_rules! enum_accessors {
     )*)
 }
 
-fn blank_sig(isa: &dyn TargetIsa, call_conv: CallConv) -> Signature {
-    let pointer_type = isa.pointer_type();
-    let mut sig = Signature::new(call_conv);
-
-    // Add the caller/callee `vmctx` parameters.
-    // Add the caller/callee `vmctx` parameters.
-    sig.params
-        .push(AbiParam::special(pointer_type, ArgumentPurpose::VMContext));
-    sig.params.push(AbiParam::new(pointer_type));
-
-    sig
+#[macro_export]
+macro_rules! owned_enum_accessors {
+    ($bind:ident $(($variant:ident($ty:ty) $get:ident $cvt:expr))*) => ($(
+        /// Attempt to access the underlying value of this `Val`, returning
+        /// `None` if it is not the correct type.
+        #[inline]
+        pub fn $get(self) -> Option<$ty> {
+            if let Self::$variant($bind) = self {
+                Some($cvt)
+            } else {
+                None
+            }
+        }
+    )*)
 }
 
 pub fn value_type(ty: ValType) -> Type {
@@ -54,6 +56,18 @@ pub fn value_type(ty: ValType) -> Type {
         // TODO maybe stack map?
         ValType::Ref(_) => todo!(),
     }
+}
+
+fn blank_sig(isa: &dyn TargetIsa, call_conv: CallConv) -> Signature {
+    let pointer_type = isa.pointer_type();
+    let mut sig = Signature::new(call_conv);
+
+    // Add the caller/callee `vmctx` parameters.
+    sig.params
+        .push(AbiParam::special(pointer_type, ArgumentPurpose::VMContext));
+    sig.params.push(AbiParam::new(pointer_type));
+
+    sig
 }
 
 pub fn wasm_call_signature(isa: &dyn TargetIsa, func_ty: &FuncType) -> Signature {
@@ -100,28 +114,6 @@ pub fn array_call_signature(isa: &dyn TargetIsa) -> ir::Signature {
     sig.params.push(AbiParam::new(isa.pointer_type()));
     sig.params.push(AbiParam::new(isa.pointer_type()));
     sig
-}
-
-pub(crate) trait HashMapEntryTryExt<'a, K, V, S>: Sized {
-    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
-    where
-        K: Hash,
-        S: BuildHasher;
-}
-
-impl<'a, K, V, S, A: Allocator> HashMapEntryTryExt<'a, K, V, S>
-    for hashbrown::hash_map::Entry<'a, K, V, S, A>
-{
-    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
-    where
-        K: Hash,
-        S: BuildHasher,
-    {
-        match self {
-            hashbrown::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-            hashbrown::hash_map::Entry::Vacant(entry) => Ok(entry.insert(default()?)),
-        }
-    }
 }
 
 /// Is `bytes` a multiple of the host page size?

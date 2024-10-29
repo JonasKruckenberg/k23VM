@@ -1,17 +1,14 @@
 use crate::const_eval::ConstExprEvaluator;
-use crate::instance::{
-    ExportFunction, ExportGlobal, ExportMemory, ExportTable, Extern, Imports, Instance,
-};
+use crate::instance::Instance;
 use crate::instance_allocator::InstanceAllocator;
 use crate::module::Module;
-use crate::store::{InstanceHandle, Store};
-use crate::translate::EntityType;
-use crate::vmcontext::{VMFunctionImport, VMGlobalImport, VMMemoryImport, VMTableImport};
+use crate::parse::EntityType;
+use crate::vm::Imports;
+use crate::{Extern, Store};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
-use wasmparser::{FuncType, GlobalType, MemoryType, TableType};
 
 #[derive(Debug, Default)]
 pub struct Linker {
@@ -35,15 +32,36 @@ impl Linker {
         self.map.get(&key)
     }
 
+    pub fn alias_module(&mut self, module: &str, as_module: &str) -> crate::Result<&mut Self> {
+        let module = self.intern_str(module);
+        let as_module = self.intern_str(as_module);
+        let items = self
+            .map
+            .iter()
+            .filter(|(key, _def)| key.module == module)
+            .map(|(key, def)| (key.name, def.clone()))
+            .collect::<Vec<_>>();
+        for (name, item) in items {
+            self.insert(
+                ImportKey {
+                    module: as_module,
+                    name,
+                },
+                item,
+            )?;
+        }
+        Ok(self)
+    }
+
     pub fn define_instance(
         &mut self,
         store: &mut Store,
         module_name: &str,
         instance: Instance,
-    ) -> crate::TranslationResult<&mut Self> {
+    ) -> crate::Result<&mut Self> {
         let exports = instance
             .exports(store)
-            .map(|e| (self.import_key(module_name, Some(e.name)), e.ext))
+            .map(|e| (self.import_key(module_name, Some(e.name)), e.value))
             .collect::<Vec<_>>(); // TODO can we somehow get rid of this?
 
         for (key, ext) in exports {
@@ -53,70 +71,47 @@ impl Linker {
         Ok(self)
     }
 
-    pub fn instantiate<'wasm>(
+    pub fn instantiate(
         &self,
-        store: &mut Store<'wasm>,
+        store: &mut Store,
         alloc: &dyn InstanceAllocator,
-        module: &Module<'wasm>,
         const_eval: &mut ConstExprEvaluator,
-    ) -> crate::TranslationResult<Instance> {
-        let mut imports = Imports::default();
+        module: &Module,
+    ) -> crate::Result<Instance> {
+        let mut imports = Imports::with_capacity_for(module.parsed());
         for import in module.imports() {
-            let def = self
-                .get(import.module, import.name)
-                .expect("missing import");
+            let def = self.get(&import.module, &import.name).expect(&format!(
+                "missing {} import {}::{}",
+                import.ty, import.module, import.name
+            ));
 
-            match import.ty {
-                EntityType::Function(_) => unsafe {
-                    // TODO typecheck
-                    let f = def.unwrap_func().func_ref;
-
-                    imports.functions.push(VMFunctionImport {
-                        wasm_call: f.as_ref().wasm_call,
-                        array_call: f.as_ref().array_call,
-                        vmctx: f.as_ref().vmctx,
-                    });
-                },
-                EntityType::Table(_) => {
-                    // TODO typecheck
-                    let t = def.unwrap_table();
-
-                    imports.tables.push(VMTableImport {
-                        from: t.definition,
-                        vmctx: t.vmctx,
-                    })
+            match (def, &import.ty) {
+                (Extern::Func(func), EntityType::Function(ty)) => {
+                    assert_eq!(func.ty(store), ty);
+                    imports.functions.push(func.as_vmfunction_import(store))
                 }
-                EntityType::Memory(_) => {
-                    // TODO typecheck
-                    let t = def.unwrap_memory();
-
-                    imports.memories.push(VMMemoryImport {
-                        from: t.definition,
-                        vmctx: t.vmctx,
-                    })
+                (Extern::Table(table), EntityType::Table(ty)) => {
+                    assert_eq!(table.ty(store), ty);
+                    imports.tables.push(table.as_vmtable_import(store))
                 }
-                EntityType::Global(_) => {
-                    // TODO typecheck
-                    let t = def.unwrap_global();
-
-                    imports.globals.push(VMGlobalImport {
-                        from: t.definition,
-                        vmctx: t.vmctx,
-                    })
+                (Extern::Memory(memory), EntityType::Memory(ty)) => {
+                    assert_eq!(memory.ty(store), ty);
+                    imports.memories.push(memory.as_vmmemory_import(store))
                 }
-                EntityType::Tag(_) => {
-                    todo!()
+                (Extern::Global(global), EntityType::Global(ty)) => {
+                    assert_eq!(global.ty(store), ty);
+                    imports.globals.push(global.as_vmglobal_import(store))
                 }
+                _ => panic!("mismatched import type"),
             }
         }
 
-        Instance::new(store, alloc, const_eval, module.clone(), imports)
+        unsafe { Instance::new_unchecked(store, alloc, const_eval, module.clone(), imports) }
     }
 
-    fn insert(&mut self, key: ImportKey, item: Extern) -> crate::TranslationResult<()> {
+    fn insert(&mut self, key: ImportKey, item: Extern) -> crate::Result<()> {
         match self.map.entry(key) {
             Entry::Occupied(_) => {
-                let module = &self.strings[key.module];
                 panic!("import defined twice");
             }
             Entry::Vacant(v) => {

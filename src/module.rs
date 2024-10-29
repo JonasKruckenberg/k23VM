@@ -1,96 +1,148 @@
-use crate::code_memory::CodeMemory;
-use crate::compile::{CompileJobs, CompiledModuleInfo, Compiler, ObjectBuilder};
-use crate::indices::EntityIndex;
-use crate::mmap_vec::MmapVec;
-use crate::store::Store;
-use crate::translate::{Import, ModuleTranslator, TranslatedModule, Translation};
-use crate::vmcontext::VMContextPlan;
+use crate::compile_cranelift::{CompiledModule, Compiler, ObjectBuilder};
+use crate::indices::{EntityIndex, FuncIndex};
+use crate::parse::{Import, ModuleParser, ParsedModule};
+use crate::vm::{CodeMemory, MmapVec, VMContextPlan};
 use alloc::sync::Arc;
-use spin::Mutex;
-use tracing::log;
+use gimli::EndianSlice;
 use wasmparser::Validator;
 
 #[derive(Debug, Clone)]
-pub struct Module<'wasm>(pub(crate) Arc<ModuleInner<'wasm>>);
+pub struct Module(Arc<ModuleInner>);
 
-#[derive(Debug)]
-pub(crate) struct ModuleInner<'wasm> {
-    pub info: Arc<CompiledModuleInfo<'wasm>>,
-    pub code: Arc<CodeMemory>,
-    pub vmctx_plan: VMContextPlan,
-}
-
-impl<'wasm> Module<'wasm> {
-    pub fn from_binary(
+impl Module {
+    pub fn from_bytes(
         validator: &mut Validator,
         compiler: &Compiler,
-        store: &mut Store,
-        bytes: &'wasm [u8],
-    ) -> crate::TranslationResult<Self> {
-        tracing::trace!("Translating module to Cranelift IR...");
-        let translation = ModuleTranslator::new(validator).translate(bytes)?;
+        bytes: &[u8],
+    ) -> crate::Result<Self> {
+        tracing::trace!("Parsing WASM module...");
 
-        tracing::trace!("Compiling functions to machine code...");
-        let Translation {
-            module,
-            debug_info,
-            required_features,
-            func_compile_inputs,
-        } = translation;
-        let unlinked_compile_outputs = compiler
-            .compile_inputs(CompileJobs::from_module(&module, func_compile_inputs))
-            .unwrap();
-        tracing::debug!("{unlinked_compile_outputs:?}");
+        let res = ModuleParser::new(validator).parse(bytes)?;
+        // TODO assert compatability with target features
 
-        tracing::trace!("Setting up intermediate code object...");
         let mut obj_builder = ObjectBuilder::new(compiler.create_intermediate_code_object());
-
-        tracing::trace!("Appending info to intermediate code object...");
-        obj_builder.append_debug_info(&debug_info);
+        let module = obj_builder.append(compiler, res)?;
 
         tracing::trace!("Allocating new output buffer for compiled module...");
-        // TODO ca we get a size hint for this somehow??
         let mut code_buffer = MmapVec::new();
 
-        tracing::trace!("Appending compiled functions to intermediate code object...");
-        let info = unlinked_compile_outputs.link_append_and_finish(
-            compiler,
-            module,
-            obj_builder,
-            &mut code_buffer,
-        );
+        obj_builder.finish(&mut code_buffer).unwrap();
 
         let mut code = CodeMemory::new(code_buffer);
-        code.publish();
+        code.publish()?;
         let code = Arc::new(code);
 
-        crate::trap::signals::register_code(&code);
+        // crate::trap::signals::register_code(&code);
 
         Ok(Self(Arc::new(ModuleInner {
-            vmctx_plan: VMContextPlan::for_module(compiler.target_isa(), &info.module),
-            info: Arc::new(info),
+            name: None,
+            vmctx_plan: VMContextPlan::for_module(compiler.target_isa(), &module.module),
+            module: Arc::new(module),
             code,
         })))
     }
 
-    pub(crate) fn module(&self) -> &TranslatedModule<'wasm> {
-        &self.0.info.module
+    pub fn imports(&self) -> impl ExactSizeIterator<Item = &Import> {
+        self.0.module.module.imports.iter()
+    }
+    pub fn exports(&self) -> impl ExactSizeIterator<Item = (&str, EntityIndex)> + '_ {
+        self.0
+            .module
+            .module
+            .exports
+            .iter()
+            .map(|(name, index)| (name.as_str(), *index))
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.0.name.as_ref().map(|s| s.as_str())
+    }
+    pub(crate) fn symbolize_context(&self) -> crate::Result<Option<SymbolizeContext<'_>>> {
+        let dwarf = gimli::Dwarf::load(|id| -> crate::Result<_> {
+            let data = self
+                .compiled()
+                .dwarf
+                .binary_search_by_key(&(id as u8), |(id, _)| *id)
+                .ok()
+                .and_then(|i| {
+                    let (_, range) = &self.compiled().dwarf[i];
+                    let start = range.start.try_into().ok()?;
+                    let end = range.end.try_into().ok()?;
+                    self.code().dwarf().get(start..end)
+                })
+                .unwrap_or(&[]);
+
+            Ok(EndianSlice::new(data, gimli::LittleEndian))
+        })?;
+
+        let cx = addr2line::Context::from_dwarf(dwarf)?;
+
+        Ok(Some(SymbolizeContext {
+            inner: cx,
+            code_section_offset: self.compiled().code_section_offset,
+        }))
+    }
+    pub(crate) fn get_export(&self, name: &str) -> Option<EntityIndex> {
+        self.0.module.module.exports.get(name).copied()
+    }
+    pub(crate) fn parsed(&self) -> &ParsedModule {
+        &self.0.module.module
+    }
+    pub(crate) fn compiled(&self) -> &CompiledModule {
+        &self.0.module
+    }
+    pub(crate) fn code(&self) -> &CodeMemory {
+        &self.0.code
     }
     pub(crate) fn vmctx_plan(&self) -> &VMContextPlan {
         &self.0.vmctx_plan
     }
 
-    pub fn imports(&self) -> impl ExactSizeIterator<Item = &Import<'wasm>> {
-        self.module().imports.iter()
+    pub(crate) fn func_name(&self, idx: FuncIndex) -> Option<&str> {
+        // Find entry for `idx`, if present.
+        let i = self
+            .compiled()
+            .func_names
+            .binary_search_by_key(&idx, |n| n.idx)
+            .ok()?;
+        let name = &self.compiled().func_names[i];
+
+        // Here we `unwrap` the `from_utf8` but this can theoretically be a
+        // `from_utf8_unchecked` if we really wanted since this section is
+        // guaranteed to only have valid utf-8 data. Until it's a problem it's
+        // probably best to double-check this though.
+        let data = self.code().func_name_data();
+        Some(core::str::from_utf8(&data[name.offset as usize..][..name.len as usize]).unwrap())
     }
-    pub fn exports(&self) -> impl ExactSizeIterator<Item = (&'wasm str, EntityIndex)> + '_ {
-        self.module()
-            .exports
-            .iter()
-            .map(|(name, index)| (*name, *index))
+}
+
+#[derive(Debug)]
+pub struct ModuleInner {
+    name: Option<String>,
+    module: Arc<CompiledModule>,
+    code: Arc<CodeMemory>,
+    vmctx_plan: VMContextPlan,
+}
+
+type Addr2LineContext<'a> = addr2line::Context<gimli::EndianSlice<'a, gimli::LittleEndian>>;
+
+/// A context which contains dwarf debug information to translate program
+/// counters back to filenames and line numbers.
+pub struct SymbolizeContext<'a> {
+    inner: Addr2LineContext<'a>,
+    code_section_offset: u64,
+}
+
+impl<'a> SymbolizeContext<'a> {
+    /// Returns access to the [`addr2line::Context`] which can be used to query
+    /// frame information with.
+    pub fn addr2line(&self) -> &Addr2LineContext<'a> {
+        &self.inner
     }
 
-    pub fn get_export(&self, name: &str) -> Option<EntityIndex> {
-        self.module().exports.get(name).copied()
+    /// Returns the offset of the code section in the original wasm file, used
+    /// to calculate lookup values into the DWARF.
+    pub fn code_section_offset(&self) -> u64 {
+        self.code_section_offset
     }
 }

@@ -1,27 +1,26 @@
 use crate::indices::{DefinedMemoryIndex, DefinedTableIndex};
 use crate::instance_allocator::InstanceAllocator;
-use crate::memory::Memory;
-use crate::table::Table;
-use crate::translate::{MemoryPlan, TablePlan, TranslatedModule};
-use crate::vmcontext::{OwnedVMContext, VMContextPlan};
+use crate::parse::{MemoryPlan, ParsedModule, TablePlan};
+use crate::vm::{Memory, Table};
+use crate::vm::{OwnedVMContext, VMContextPlan};
 
 pub struct PlaceholderAllocatorDontUse;
 
 impl InstanceAllocator for PlaceholderAllocatorDontUse {
     unsafe fn allocate_vmctx(
         &self,
-        module: &TranslatedModule,
+        _module: &ParsedModule,
         plan: &VMContextPlan,
-    ) -> crate::TranslationResult<OwnedVMContext> {
+    ) -> crate::Result<OwnedVMContext> {
         OwnedVMContext::try_new(plan)
     }
 
     unsafe fn allocate_memory(
         &self,
-        module: &TranslatedModule,
+        _module: &ParsedModule,
         memory_plan: &MemoryPlan,
-        memory_index: DefinedMemoryIndex,
-    ) -> crate::TranslationResult<Memory> {
+        _memory_index: DefinedMemoryIndex,
+    ) -> crate::Result<Memory> {
         // TODO we could call out to some resource management instance here to obtain
         // dynamic "minimum" and "maximum" values that reflect the state of the real systems
         // memory consumption
@@ -47,24 +46,24 @@ impl InstanceAllocator for PlaceholderAllocatorDontUse {
             .ok()
             .and_then(|m| usize::try_from(m).ok());
 
-        Ok(Memory::new(memory_plan, minimum, maximum))
+        Memory::new(memory_plan, minimum, maximum)
     }
 
-    unsafe fn deallocate_memory(&self, memory_index: DefinedMemoryIndex, memory: Memory) {}
+    unsafe fn deallocate_memory(&self, _memory_index: DefinedMemoryIndex, _memory: Memory) {}
 
     unsafe fn allocate_table(
         &self,
-        module: &TranslatedModule,
+        _module: &ParsedModule,
         table_plan: &TablePlan,
-        table_index: DefinedTableIndex,
-    ) -> crate::TranslationResult<Table> {
+        _table_index: DefinedTableIndex,
+    ) -> crate::Result<Table> {
         // TODO we could call out to some resource management instance here to obtain
         // dynamic "minimum" and "maximum" values that reflect the state of the real systems
         // memory consumption
         let maximum = table_plan.ty.maximum.and_then(|m| usize::try_from(m).ok());
 
-        Ok(Table::new(table_plan, maximum))
+        Table::new(table_plan, maximum)
     }
 
-    unsafe fn deallocate_table(&self, table_index: DefinedTableIndex, table: Table) {}
+    unsafe fn deallocate_table(&self, _table_index: DefinedTableIndex, _table: Table) {}
 }

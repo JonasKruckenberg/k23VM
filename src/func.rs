@@ -1,101 +1,142 @@
-use crate::instance::ExportFunction;
-use crate::store::Store;
-use crate::vmcontext::VMVal;
-use core::ptr;
-use std::process;
-use std::ptr::NonNull;
-use tracing::log;
+use crate::store::Stored;
+use crate::traps::WasmBacktrace;
+use crate::vm::{TrapReason, VMContext, VMFunctionImport, VMVal};
+use crate::{vm, Store, Val, MAX_WASM_STACK};
+use std::mem;
 use wasmparser::FuncType;
 
-pub struct Func {
-    inner: ExportFunction,
-    ty: FuncType,
-}
+#[derive(Debug, Clone)]
+pub struct Func(Stored<vm::ExportedFunction>);
 
 impl Func {
-    pub unsafe fn from_raw(inner: ExportFunction, ty: FuncType) -> Self {
-        Self { inner, ty }
+    pub fn ty<'s>(&self, store: &'s Store) -> &'s FuncType {
+        unsafe {
+            let func_ref = store[self.0].func_ref.as_ref();
+            let instance = &store[store.vmctx2instance(VMContext::from_opaque(func_ref.vmctx))];
+            &instance.module().parsed().types[func_ref.type_index]
+        }
     }
-
-    pub fn call(&self, store: &mut Store<'static>, params: &[VMVal], results: &mut [VMVal]) {
-        // TODO check signature matches provided params and results capacity
+    pub fn call(
+        &self,
+        store: &mut Store,
+        params: &[Val],
+        results: &mut [Val],
+    ) -> crate::Result<()> {
+        // TODO typecheck params
         unsafe { self.call_unchecked(store, params, results) }
-    }
-
-    pub async fn call_async(&self, store: &mut Store<'_>, params: &[VMVal], results: &mut [VMVal]) {
-        // TODO check signature matches provided params and results capacity
-        // TODO on separate stack (Fiber) do self.call_unchecked()
     }
 
     unsafe fn call_unchecked(
         &self,
-        store: &mut Store<'static>,
-        params: &[VMVal],
-        results: &mut [VMVal],
-    ) {
-        let values_vec_size = params.len().max(self.ty.results().len());
+        store: &mut Store,
+        params: &[Val],
+        results: &mut [Val],
+    ) -> crate::Result<()> {
+        let values_vec_size = params.len().max(self.ty(store).results().len());
         let mut values_vec = store.take_wasm_vmval_storage();
         debug_assert!(values_vec.is_empty());
         values_vec.resize_with(values_vec_size, || VMVal::v128(0));
-
         for (arg, slot) in params.iter().cloned().zip(&mut values_vec) {
-            unsafe {
-                *slot = arg;
-            }
+            *slot = arg.as_vmval();
         }
 
-        self.call_unchecked_raw(store, values_vec.as_mut_ptr(), values_vec_size);
+        self.call_unchecked_raw(store, values_vec.as_mut_ptr(), values_vec_size)?;
 
-        results.copy_from_slice(&values_vec);
+        for ((i, slot), vmval) in results.iter_mut().enumerate().zip(&values_vec) {
+            let ty = self.ty(store).results()[i];
+            *slot = unsafe { Val::from_vmval(*vmval, ty) };
+        }
+
         values_vec.truncate(0);
         store.return_wasm_vmval_storage(values_vec);
+
+        Ok(())
     }
 
     unsafe fn call_unchecked_raw(
         &self,
-        store: &mut Store<'static>,
-        params_and_returns: *mut VMVal,
-        params_and_returns_capacity: usize,
-    ) {
-        let func_ref = self.inner.func_ref.as_ref();
-        let instance_handle = store.vmctx2instance[&NonNull::new(func_ref.vmctx.cast()).unwrap()];
-        let module = store.instance_data(instance_handle).module.clone();
+        store: &mut Store,
+        args_results_ptr: *mut VMVal,
+        args_results_len: usize,
+    ) -> crate::Result<()> {
+        let func_ref = store[self.0].func_ref.as_ref();
+        let vmctx = VMContext::from_opaque(func_ref.vmctx);
+        let module = store[store.vmctx2instance(vmctx)].module();
 
-        let signal_handler = Box::new(
-            move |signum: libc::c_int,
-                  siginfo: *const libc::siginfo_t,
-                  context: *const libc::c_void|
-                  -> bool {
-                let regs = crate::placeholder::get_trap_registers(context.cast_mut(), signum);
+        // Determine the stack pointer where, after which, any wasm code will
+        // immediately trap. This is checked on the entry to all wasm functions.
+        //
+        // Note that this isn't 100% precise. We are requested to give wasm
+        // `max_wasm_stack` bytes, but what we're actually doing is giving wasm
+        // probably a little less than `max_wasm_stack` because we're
+        // calculating the limit relative to this function's approximate stack
+        // pointer. Wasm will be executed on a frame beneath this one (or next
+        // to it). In any case it's expected to be at most a few hundred bytes
+        // of slop one way or another. When wasm is typically given a MB or so
+        // (a million bytes) the slop shouldn't matter too much.
+        //
+        // After we've got the stack limit then we store it into the `stack_limit`
+        // variable.
+        let stack_pointer = vm::arch::get_stack_pointer();
+        let wasm_stack_limit = stack_pointer - MAX_WASM_STACK;
+        let prev_stack = unsafe {
+            mem::replace(
+                &mut *vmctx
+                    .byte_add(module.vmctx_plan().fixed.stack_limit as usize)
+                    .cast::<usize>(),
+                wasm_stack_limit,
+            )
+        };
 
-                if let Some(trap) =
-                    crate::trap::signals::lookup_code(regs.pc).and_then(|(code, text_offset)| {
-                        let func_index = module.clone().0.info.text_offset_to_func(text_offset);
-                        println!("{:?}", code.symbol_map());
-                        println!(
-                            "{:?} {func_index:?}",
-                            code.symbol_map().get(text_offset as u64)
-                        );
-                        (code.lookup_trap_code(text_offset))
-                    })
-                {
-                    println!("wasm failed with trap {trap:?} {regs:#x?}");
-                } else {
-                    println!("not in wasm code {regs:#x?}");
-                }
-
-                process::exit(1);
+        let res = vm::catch_traps(
+            vmctx,
+            module.vmctx_plan().fixed.clone(),
+            |caller| {
+                (func_ref.host_call)(vmctx, caller, args_results_ptr, args_results_len);
             },
         );
 
-        let res =
-            crate::placeholder::catch_traps(Some(signal_handler.as_ref() as *const _), || {
-                (func_ref.array_call)(
-                    func_ref.vmctx.cast(), // TODO is this cast here correct??
-                    ptr::null_mut(),       // No caller for now TODO change
-                    params_and_returns,
-                    params_and_returns_capacity,
-                );
+        if let Err(trap) = res {
+            let (faulting_pc, trap_code, message) = match trap.reason {
+                TrapReason::Wasm(trap_code) => (None, trap_code, "k23 builtin produced a trap"),
+                TrapReason::Cranelift {
+                    pc,
+                    faulting_addr: _, // TODO make use of this
+                    trap: trap_code,
+                } => (Some(pc), trap_code, "JIT-compiled WASM produced a trap"),
+            };
+
+            let backtrace = trap
+                .backtrace
+                .map(|backtrace| WasmBacktrace::from_captured(module, backtrace, faulting_pc));
+
+            return Err(crate::Error::Trap {
+                backtrace,
+                trap: trap_code,
+                message: message.to_string(),
             });
+        }
+
+        unsafe {
+            *vmctx
+                .byte_add(module.vmctx_plan().fixed.stack_limit as usize)
+                .cast::<usize>() = prev_stack;
+        };
+
+        Ok(())
+    }
+
+    pub(crate) fn as_vmfunction_import(&self, store: &Store) -> VMFunctionImport {
+        // TODO check access
+        let func_ref = unsafe { store[self.0].func_ref.as_ref() };
+        VMFunctionImport {
+            wasm_call: func_ref.wasm_call,
+            host_call: func_ref.host_call,
+            vmctx: func_ref.vmctx,
+        }
+    }
+
+    pub(crate) fn from_vm_export(store: &mut Store, export: vm::ExportedFunction) -> Self {
+        Self(store.push_exported_function(export))
     }
 }
