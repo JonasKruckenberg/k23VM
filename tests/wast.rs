@@ -18,10 +18,10 @@ macro_rules! spectests {
     ($($names:ident $paths:literal),*) => {
         $(
             #[test_log::test]
-            fn $names() {
-                let mut ctx = WastContext::new_default().unwrap();
+            fn $names() -> anyhow::Result<()> {
+                let mut ctx = WastContext::new_default()?;
 
-                ctx.run_file(Path::new(file!()).parent().unwrap().join($paths)).unwrap();
+                ctx.run_file(Path::new(file!()).parent().unwrap().join($paths))
             }
         )*
     };

@@ -1,7 +1,7 @@
 use wasmparser::GlobalType;
 use crate::store::Stored;
 use crate::vm::{VMGlobalImport};
-use crate::{vm, Store};
+use crate::{vm, Store, Val};
 
 #[derive(Debug, Clone)]
 pub struct Global(Stored<vm::ExportedGlobal>);
@@ -13,9 +13,9 @@ impl Global {
     pub fn ty(&self, store: &Store) -> &GlobalType {
         todo!()
     }
-    // pub fn get(&self, store: &Store) -> Val {
-    //     todo!()
-    // }
+    pub fn get(&self, store: &Store) -> Val {
+        todo!()
+    }
     // pub fn set(&self, store: &mut Store, val: Val) {
     //     todo!()
     // }
