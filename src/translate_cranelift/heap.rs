@@ -1,12 +1,13 @@
-use crate::translate::state::FuncTranslationState;
-use crate::translate::TranslationEnvironment;
-use core::num::TryFromIntError;
+use crate::translate_cranelift::TranslationEnvironment;
+use crate::traps::TRAP_HEAP_MISALIGNED;
 use cranelift_codegen::cursor::{Cursor, FuncCursor};
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{Expr, Fact, InstBuilder, MemFlags, RelSourceLoc, Type, Value};
+use cranelift_codegen::ir::{
+    Expr, Fact, InstBuilder, MemFlags, RelSourceLoc, TrapCode, Type, Value,
+};
 use cranelift_frontend::FunctionBuilder;
-use wasmparser::{MemArg, MemoryType};
+use wasmparser::MemArg;
 
 /// Like `Option<T>` but specifically for passing information about transitions
 /// from reachable to unreachable state and the like from callees to callers.
@@ -58,8 +59,8 @@ impl IRHeap {
         index: Value,
         access_size: u8,
         memarg: &MemArg,
-        env: &TranslationEnvironment,
-    ) -> crate::TranslationResult<Reachability<(MemFlags, Value, Value)>> {
+        env: &mut TranslationEnvironment,
+    ) -> crate::Result<Reachability<(MemFlags, Value, Value)>> {
         let addr = match u32::try_from(memarg.offset) {
             // If our offset fits within a u32, then we can place it into the
             // offset immediate of the `heap_addr` instruction.
@@ -73,7 +74,7 @@ impl IRHeap {
                 let adjusted_index =
                     builder
                         .ins()
-                        .uadd_overflow_trap(index, offset, ir::TrapCode::HeapOutOfBounds);
+                        .uadd_overflow_trap(index, offset, TrapCode::HEAP_OUT_OF_BOUNDS);
                 self.bounds_check_and_compute_addr(builder, adjusted_index, 0, access_size, env)?
             }
         };
@@ -114,7 +115,7 @@ impl IRHeap {
         loaded_bytes: u8,
         memarg: &MemArg,
         env: &mut TranslationEnvironment,
-    ) -> crate::TranslationResult<Reachability<(MemFlags, Value, Value)>> {
+    ) -> crate::Result<Reachability<(MemFlags, Value, Value)>> {
         // Atomic addresses must all be aligned correctly, and for now we check
         // alignment before we check out-of-bounds-ness. The order of this check may
         // need to be updated depending on the outcome of the official threads
@@ -138,7 +139,7 @@ impl IRHeap {
                 .ins()
                 .band_imm(effective_addr, i64::from(loaded_bytes - 1));
             let f = builder.ins().icmp_imm(IntCC::NotEqual, misalignment, 0);
-            builder.ins().trapnz(f, ir::TrapCode::HeapMisaligned);
+            builder.ins().trapnz(f, TRAP_HEAP_MISALIGNED);
         }
 
         self.prepare_addr(builder, index, loaded_bytes, memarg, env)
@@ -153,8 +154,8 @@ impl IRHeap {
         offset: u32,
         // Static size of the heap access.
         access_size: u8,
-        env: &TranslationEnvironment,
-    ) -> crate::TranslationResult<Reachability<Value>> {
+        env: &mut TranslationEnvironment,
+    ) -> crate::Result<Reachability<Value>> {
         let pointer_bit_width = u16::try_from(env.pointer_type().bits()).unwrap();
         let orig_index = index;
         let index = cast_index_to_pointer_ty(
@@ -235,7 +236,7 @@ impl IRHeap {
             // 1. First special case: trap immediately if `offset + access_size >
             //    bound`, since we will end up being out-of-bounds regardless of the
             //    given `index`.
-            builder.ins().trap(ir::TrapCode::HeapOutOfBounds);
+            builder.ins().trap(TrapCode::HEAP_OUT_OF_BOUNDS);
             Ok(Reachability::Unreachable)
         } else if self.index_type == ir::types::I32
             && u64::from(u32::MAX) <= self.bound + self.offset_guard_size - offset_and_size
@@ -322,7 +323,7 @@ impl IRHeap {
             );
             Ok(Reachability::Reachable(
                 self.explicit_check_oob_condition_and_compute_addr(
-                    &mut builder.cursor(),
+                    builder,
                     env.pointer_type(),
                     index,
                     offset,
@@ -330,6 +331,7 @@ impl IRHeap {
                     spectre_mitigations_enabled,
                     self.memory_type.map(|ty| (ty, self.bound)),
                     oob,
+                    env,
                 ),
             ))
         }
@@ -338,7 +340,7 @@ impl IRHeap {
     #[allow(clippy::too_many_arguments)]
     fn explicit_check_oob_condition_and_compute_addr(
         &self,
-        pos: &mut FuncCursor,
+        builder: &mut FunctionBuilder,
         addr_ty: Type,
         index: Value,
         offset: u32,
@@ -351,22 +353,23 @@ impl IRHeap {
         // bounds (and therefore we should trap) and is zero when the heap access is
         // in bounds (and therefore we can proceed).
         oob_condition: Value,
+        env: &mut TranslationEnvironment,
     ) -> Value {
         if !spectre_mitigations_enabled {
-            pos.ins()
-                .trapnz(oob_condition, ir::TrapCode::HeapOutOfBounds);
+            env.trapnz(builder, oob_condition, TrapCode::HEAP_OUT_OF_BOUNDS);
         }
-
-        let mut addr = self.compute_addr(pos, addr_ty, index, offset, pcc);
+        let mut addr = self.compute_addr(&mut builder.cursor(), addr_ty, index, offset, pcc);
 
         if spectre_mitigations_enabled {
-            let null = pos.ins().iconst(addr_ty, 0);
-            addr = pos.ins().select_spectre_guard(oob_condition, null, addr);
+            let null = builder.ins().iconst(addr_ty, 0);
+            addr = builder
+                .ins()
+                .select_spectre_guard(oob_condition, null, addr);
 
             if let Some((ty, size)) = pcc {
-                pos.func.dfg.facts[null] =
+                builder.func.dfg.facts[null] =
                     Some(Fact::constant(u16::try_from(addr_ty.bits()).unwrap(), 0));
-                pos.func.dfg.facts[addr] = Some(Fact::Mem {
+                builder.func.dfg.facts[addr] = Some(Fact::Mem {
                     ty,
                     min_offset: 0,
                     max_offset: size.checked_sub(u64::from(access_size)).unwrap(),

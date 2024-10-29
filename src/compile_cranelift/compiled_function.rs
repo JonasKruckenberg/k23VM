@@ -1,9 +1,9 @@
+use crate::builtins::BuiltinFunctionIndex;
 use crate::indices::FuncIndex;
-use crate::trap::{Trap, DEBUG_ASSERT_TRAP_CODE};
-use crate::NS_WASM_FUNC;
-use cranelift_codegen::ir::{
-    ExternalName, StackSlots, TrapCode, UserExternalName, UserExternalNameRef,
-};
+use crate::traps::Trap;
+use crate::FilePos;
+use crate::{NS_BUILTIN, NS_WASM_FUNC};
+use cranelift_codegen::ir::{ExternalName, StackSlots, UserExternalName, UserExternalNameRef};
 use cranelift_codegen::{
     binemit, Final, FinalizedMachReloc, FinalizedRelocTarget, MachBufferFinalized,
     ValueLabelsRanges,
@@ -46,29 +46,9 @@ impl CompiledFunction {
     }
 
     pub fn traps(&self) -> impl ExactSizeIterator<Item = TrapInfo> + '_ {
-        self.buffer.traps().iter().map(|trap| {
-            let code = match trap.code {
-                TrapCode::StackOverflow => Trap::StackOverflow,
-                TrapCode::HeapOutOfBounds => Trap::MemoryOutOfBounds,
-                TrapCode::HeapMisaligned => Trap::HeapMisaligned,
-                TrapCode::TableOutOfBounds => Trap::TableOutOfBounds,
-                TrapCode::IndirectCallToNull => Trap::IndirectCallToNull,
-                TrapCode::BadSignature => Trap::BadSignature,
-                TrapCode::IntegerOverflow => Trap::IntegerOverflow,
-                TrapCode::IntegerDivisionByZero => Trap::IntegerDivisionByZero,
-                TrapCode::BadConversionToInteger => Trap::BadConversionToInteger,
-                TrapCode::UnreachableCodeReached => Trap::UnreachableCodeReached,
-                TrapCode::Interrupt => todo!(),
-                TrapCode::NullReference => Trap::NullReference,
-                TrapCode::NullI31Ref => Trap::NullI31Ref,
-                TrapCode::User(DEBUG_ASSERT_TRAP_CODE) => Trap::DebugAssertionFailed,
-                TrapCode::User(c) => panic!("unknown trap code {c}"),
-            };
-
-            TrapInfo {
-                code,
-                offset: trap.offset,
-            }
+        self.buffer.traps().iter().map(|trap| TrapInfo {
+            trap: Trap::from_trap_code(trap.code).expect("unexpected trap code"),
+            offset: trap.offset,
         })
     }
 
@@ -90,25 +70,15 @@ pub struct CompiledFunctionMetadata {
     pub end_srcloc: FilePos,
 }
 
-/// A position within an original source file,
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FilePos(u32);
-
-impl Default for FilePos {
-    fn default() -> Self {
-        Self(u32::MAX)
-    }
-}
-
 pub struct TrapInfo {
     pub offset: u32,
-    pub code: Trap,
+    pub trap: Trap,
 }
 
 #[derive(Debug, Copy, Clone)]
 pub enum RelocationTarget {
     Wasm(FuncIndex),
-    // Builtin(BuiltinFunctionIndex),
+    Builtin(BuiltinFunctionIndex),
 }
 
 #[derive(Debug)]
@@ -138,9 +108,9 @@ impl Relocation {
                     // A reference to another jit'ed WASM function
                     NS_WASM_FUNC => RelocationTarget::Wasm(FuncIndex::from_u32(name.index)),
                     // A reference to a WASM builtin
-                    // NS_WASM_BUILTIN => {
-                    //     RelocationTarget::Builtin(BuiltinFunctionIndex::from_u32(name.index))
-                    // }
+                    NS_BUILTIN => {
+                        RelocationTarget::Builtin(BuiltinFunctionIndex::from_u32(name.index))
+                    }
                     _ => panic!("unknown namespace {}", name.namespace),
                 }
             }

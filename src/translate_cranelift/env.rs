@@ -1,32 +1,35 @@
 use crate::indices::{
-    DataIndex, DefinedMemoryIndex, ElemIndex, FuncIndex, GlobalIndex, MemoryIndex, TableIndex,
-    TypeIndex,
+    DataIndex, ElemIndex, FuncIndex, GlobalIndex, MemoryIndex, TableIndex, TypeIndex,
 };
-use crate::translate::heap::IRHeap;
-use crate::translate::{IRGlobal, TranslatedModule};
+use crate::parse::ParsedModule;
+use crate::translate_cranelift::builtins::BuiltinFunctions;
+use crate::translate_cranelift::heap::IRHeap;
+use crate::translate_cranelift::IRGlobal;
+use crate::traps::{Trap, TRAP_INTERNAL_ASSERT};
 use crate::utils::{value_type, wasm_call_signature};
-use crate::vmcontext::VMContextPlan;
+use crate::vm::VMContextPlan;
 use alloc::vec;
 use alloc::vec::Vec;
 use cranelift_codegen::cursor::FuncCursor;
 use cranelift_codegen::ir;
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::Offset32;
-use cranelift_codegen::ir::types::{I32, I64};
+use cranelift_codegen::ir::types::{I32, I64, I8};
 use cranelift_codegen::ir::{
-    ArgumentPurpose, Fact, FuncRef, Function, GlobalValue, Inst, InstBuilder, MemFlags, SigRef,
-    Signature, Type, Value,
+    ArgumentPurpose, Fact, FuncRef, Function, Inst, InstBuilder, MemFlags, SigRef, Signature,
+    TrapCode, Type, Value,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
-use wasmparser::{HeapType, ValType};
+use wasmparser::HeapType;
 
 /// Environment state required for function translation.
 ///
 /// This type holds all information about the wider WASM module and runtime to
 /// facilitate the translation of a single function.
-pub struct TranslationEnvironment<'module_env, 'wasm> {
+pub struct TranslationEnvironment<'module_env> {
     isa: &'module_env dyn TargetIsa,
-    module: &'module_env TranslatedModule<'wasm>,
+    module: &'module_env ParsedModule,
 
     pub(crate) vmctx_plan: VMContextPlan,
 
@@ -35,19 +38,27 @@ pub struct TranslationEnvironment<'module_env, 'wasm> {
     /// The PCC memory type describing the vmctx layout, if we're
     /// using PCC.
     pcc_vmctx_memtype: Option<ir::MemoryType>,
+
+    /// Caches of signatures for builtin functions.
+    builtin_functions: BuiltinFunctions,
+
+    /// Whether to use software trap_handling for WASM trap_handling instead of native trap_handling.
+    ///
+    /// This is useful when signal/interrupt handling is not possible or desired.
+    software_traps: bool,
 }
 
-impl<'module_env, 'wasm> TranslationEnvironment<'module_env, 'wasm> {
-    pub(crate) fn new(
-        isa: &'module_env dyn TargetIsa,
-        module: &'module_env TranslatedModule<'wasm>,
-    ) -> Self {
+impl<'module_env> TranslationEnvironment<'module_env> {
+    pub(crate) fn new(isa: &'module_env dyn TargetIsa, module: &'module_env ParsedModule) -> Self {
+        let builtin_functions = BuiltinFunctions::new(isa);
         Self {
             isa,
             module,
             vmctx_plan: VMContextPlan::for_module(isa, module),
             vmctx: None,
             pcc_vmctx_memtype: None,
+            software_traps: true,
+            builtin_functions,
         }
     }
 
@@ -129,7 +140,7 @@ impl<'module_env, 'wasm> TranslationEnvironment<'module_env, 'wasm> {
     }
 }
 
-impl TranslationEnvironment<'_, '_> {
+impl TranslationEnvironment<'_> {
     fn vmctx(&mut self, func: &mut Function) -> ir::GlobalValue {
         self.vmctx.unwrap_or_else(|| {
             let vmctx = func.create_global_value(ir::GlobalValueData::VMContext);
@@ -154,6 +165,12 @@ impl TranslationEnvironment<'_, '_> {
             self.vmctx = Some(vmctx);
             vmctx
         })
+    }
+
+    pub(crate) fn vmctx_val(&mut self, pos: &mut FuncCursor<'_>) -> Value {
+        let pointer_type = self.pointer_type();
+        let vmctx = self.vmctx(&mut pos.func);
+        pos.ins().global_value(pointer_type, vmctx)
     }
 
     fn get_global_location(
@@ -182,7 +199,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         func: &mut Function,
         index: GlobalIndex,
-    ) -> crate::TranslationResult<IRGlobal> {
+    ) -> crate::Result<IRGlobal> {
         let (gv, offset) = self.get_global_location(func, index);
 
         Ok(IRGlobal::Memory {
@@ -196,7 +213,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         func: &mut Function,
         index: MemoryIndex,
-    ) -> crate::TranslationResult<IRHeap> {
+    ) -> crate::Result<IRHeap> {
         let mp = &self.module.memory_plans[index];
 
         let min_size = mp.minimum_byte_size().unwrap_or_else(|_| {
@@ -328,8 +345,7 @@ impl TranslationEnvironment<'_, '_> {
         &self,
         func: &mut Function,
         index: FuncIndex,
-    ) -> crate::TranslationResult<FuncRef> {
-        // log::trace!("{:#?}", self.module);
+    ) -> crate::Result<FuncRef> {
         let sig_index = self.module.functions[index].signature;
         let sig = &self.module.types[sig_index];
 
@@ -368,8 +384,70 @@ impl TranslationEnvironment<'_, '_> {
         &self,
         func: &mut Function,
         index: TypeIndex,
-    ) -> crate::TranslationResult<SigRef> {
+    ) -> crate::Result<SigRef> {
         todo!()
+    }
+
+    pub fn trap(&mut self, builder: &mut FunctionBuilder, code: TrapCode) {
+        match (self.software_traps, Trap::from_trap_code(code)) {
+            // If software trap_handling are enabled and there is a trap for this code,
+            // insert a call to the trap libcall. We also insert a native trap instruction afterward
+            // for safety.
+            (true, Some(trap)) => {
+                let libcall = self.builtin_functions.trap(&mut builder.func);
+                let vmctx = self.vmctx_val(&mut builder.cursor());
+                let trap_code = builder.ins().iconst(I8, i64::from(u8::from(trap)));
+
+                builder.ins().call(libcall, &[vmctx, trap_code]);
+
+                builder.ins().trap(TRAP_INTERNAL_ASSERT);
+            }
+
+            // Otherwise, if software trap_handling are disabled or there is no trap for this code, just emit a native trap instruction.
+            (false, _) | (_, None) => {
+                builder.ins().trap(code);
+            }
+        }
+    }
+    pub fn trapz(&mut self, builder: &mut FunctionBuilder, value: Value, code: TrapCode) {
+        if self.software_traps {
+            let ty = builder.func.dfg.value_type(value);
+            let zero = builder.ins().iconst(ty, 0);
+            let cmp = builder.ins().icmp(IntCC::Equal, value, zero);
+            self.conditionally_trap(builder, cmp, code);
+        } else {
+            builder.ins().trapz(value, code);
+        }
+    }
+    pub fn trapnz(&mut self, builder: &mut FunctionBuilder, value: Value, code: TrapCode) {
+        if self.software_traps {
+            let ty = builder.func.dfg.value_type(value);
+            let zero = builder.ins().iconst(ty, 0);
+            let cmp = builder.ins().icmp(IntCC::NotEqual, value, zero);
+            self.conditionally_trap(builder, cmp, code);
+        } else {
+            builder.ins().trapnz(value, code);
+        }
+    }
+
+    /// Helper to conditionally trap on `cond`.
+    fn conditionally_trap(&mut self, builder: &mut FunctionBuilder, cond: Value, code: TrapCode) {
+        debug_assert!(self.software_traps);
+
+        let trap_block = builder.create_block();
+        builder.set_cold_block(trap_block);
+        let continuation_block = builder.create_block();
+
+        builder
+            .ins()
+            .brif(cond, trap_block, &[], continuation_block, &[]);
+
+        builder.seal_block(trap_block);
+        builder.seal_block(continuation_block);
+
+        builder.switch_to_block(trap_block);
+        self.trap(builder, code);
+        builder.switch_to_block(continuation_block);
     }
 
     /// Translate a WASM `global.get` instruction at the builder's current position
@@ -378,7 +456,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         builder: &mut FunctionBuilder,
         index: GlobalIndex,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -389,7 +467,7 @@ impl TranslationEnvironment<'_, '_> {
         builder: &mut FunctionBuilder,
         index: GlobalIndex,
         value: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -406,7 +484,7 @@ impl TranslationEnvironment<'_, '_> {
         callee_index: FuncIndex,
         callee: FuncRef,
         call_args: &[Value],
-    ) -> crate::TranslationResult<Inst> {
+    ) -> crate::Result<Inst> {
         let mut real_call_args = Vec::with_capacity(call_args.len() + 2);
         let caller_vmctx = builder
             .func
@@ -470,7 +548,7 @@ impl TranslationEnvironment<'_, '_> {
     /// The signature `sig_ref` was previously created by `make_indirect_sig()`.
     ///
     /// Return the call instruction whose results are the WebAssembly return values.
-    /// Returns `None` if this statically traps instead of creating a call
+    /// Returns `None` if this statically trap_handling instead of creating a call
     /// instruction.
     pub fn translate_call_indirect(
         &mut self,
@@ -480,7 +558,7 @@ impl TranslationEnvironment<'_, '_> {
         sig_ref: SigRef,
         callee: Value,
         args: &[Value],
-    ) -> crate::TranslationResult<Option<Inst>> {
+    ) -> crate::Result<Option<Inst>> {
         todo!()
     }
 
@@ -501,7 +579,7 @@ impl TranslationEnvironment<'_, '_> {
         sig_ref: SigRef,
         callee: Value,
         args: &[Value],
-    ) -> crate::TranslationResult<Inst> {
+    ) -> crate::Result<Inst> {
         todo!()
     }
 
@@ -520,7 +598,7 @@ impl TranslationEnvironment<'_, '_> {
         callee_index: FuncIndex,
         callee: FuncRef,
         args: &[Value],
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -540,7 +618,7 @@ impl TranslationEnvironment<'_, '_> {
         sig_ref: SigRef,
         callee: Value,
         args: &[Value],
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -559,7 +637,7 @@ impl TranslationEnvironment<'_, '_> {
         sig_ref: SigRef,
         callee: Value,
         args: &[Value],
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -574,7 +652,7 @@ impl TranslationEnvironment<'_, '_> {
         pos: FuncCursor,
         memory_index: MemoryIndex,
         delta: Value,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -587,7 +665,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         pos: FuncCursor,
         memory_index: MemoryIndex,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -603,7 +681,7 @@ impl TranslationEnvironment<'_, '_> {
         src_pos: Value,
         dst_pos: Value,
         len: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -618,7 +696,7 @@ impl TranslationEnvironment<'_, '_> {
         dst: Value,
         value: Value,
         len: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -635,7 +713,7 @@ impl TranslationEnvironment<'_, '_> {
         dst: Value,
         src: Value,
         len: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -644,7 +722,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         pos: FuncCursor,
         data_index: DataIndex,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -657,7 +735,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         pos: FuncCursor,
         table_index: TableIndex,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -673,7 +751,7 @@ impl TranslationEnvironment<'_, '_> {
         table_index: TableIndex,
         delta: Value,
         initial_value: Value,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -687,7 +765,7 @@ impl TranslationEnvironment<'_, '_> {
         pos: FuncCursor,
         table_index: TableIndex,
         index: Value,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -700,7 +778,7 @@ impl TranslationEnvironment<'_, '_> {
         table_index: TableIndex,
         value: Value,
         index: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -716,7 +794,7 @@ impl TranslationEnvironment<'_, '_> {
         dst: Value,
         src: Value,
         len: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -730,7 +808,7 @@ impl TranslationEnvironment<'_, '_> {
         dst: Value,
         value: Value,
         len: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -746,7 +824,7 @@ impl TranslationEnvironment<'_, '_> {
         dst: Value,
         src: Value,
         len: Value,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -755,7 +833,7 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         pos: FuncCursor,
         elem_index: ElemIndex,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         todo!()
     }
 
@@ -777,7 +855,7 @@ impl TranslationEnvironment<'_, '_> {
         address: Value,
         expected_value: Value,
         timeout: Value,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
@@ -795,25 +873,17 @@ impl TranslationEnvironment<'_, '_> {
         memory_index: MemoryIndex,
         address: Value,
         count: Value,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
     /// Translate a `ref.null T` WebAssembly instruction.
-    pub fn translate_ref_null(
-        &mut self,
-        pos: FuncCursor,
-        hty: HeapType,
-    ) -> crate::TranslationResult<Value> {
+    pub fn translate_ref_null(&mut self, pos: FuncCursor, hty: HeapType) -> crate::Result<Value> {
         todo!()
     }
 
     /// Translate a `ref.is_null` WebAssembly instruction.
-    pub fn translate_ref_is_null(
-        &mut self,
-        pos: FuncCursor,
-        value: Value,
-    ) -> crate::TranslationResult<Value> {
+    pub fn translate_ref_is_null(&mut self, pos: FuncCursor, value: Value) -> crate::Result<Value> {
         todo!()
     }
 
@@ -822,34 +892,22 @@ impl TranslationEnvironment<'_, '_> {
         &mut self,
         pos: FuncCursor,
         index: FuncIndex,
-    ) -> crate::TranslationResult<Value> {
+    ) -> crate::Result<Value> {
         todo!()
     }
 
     /// Translate an `i32` value into an `i31ref`.
-    pub fn translate_ref_i31(
-        &mut self,
-        pos: FuncCursor,
-        value: Value,
-    ) -> crate::TranslationResult<Value> {
+    pub fn translate_ref_i31(&mut self, pos: FuncCursor, value: Value) -> crate::Result<Value> {
         todo!()
     }
 
     /// Sign-extend an `i31ref` into an `i32`.
-    pub fn translate_i31_get_s(
-        &mut self,
-        pos: FuncCursor,
-        value: Value,
-    ) -> crate::TranslationResult<Value> {
+    pub fn translate_i31_get_s(&mut self, pos: FuncCursor, value: Value) -> crate::Result<Value> {
         todo!()
     }
 
     /// Zero-extend an `i31ref` into an `i32`.
-    pub fn translate_i31_get_u(
-        &mut self,
-        pos: FuncCursor,
-        value: Value,
-    ) -> crate::TranslationResult<Value> {
+    pub fn translate_i31_get_u(&mut self, pos: FuncCursor, value: Value) -> crate::Result<Value> {
         todo!()
     }
 }

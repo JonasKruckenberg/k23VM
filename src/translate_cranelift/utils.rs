@@ -1,6 +1,8 @@
 //! Helper functions and structures for the translation.
 
-use crate::translate::env::TranslationEnvironment;
+use crate::translate_cranelift::TranslationEnvironment;
+use core::alloc::Allocator;
+use core::hash::{BuildHasher, Hash};
 use cranelift_codegen::ir;
 use cranelift_frontend::FunctionBuilder;
 use wasmparser::{FuncValidator, WasmModuleResources};
@@ -9,7 +11,7 @@ use wasmparser::{FuncValidator, WasmModuleResources};
 pub fn blocktype_params_results<T>(
     validator: &FuncValidator<T>,
     ty: wasmparser::BlockType,
-) -> crate::TranslationResult<(
+) -> crate::Result<(
     impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + '_,
     impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + '_,
 )>
@@ -83,7 +85,7 @@ pub fn block_with_params(
     builder: &mut FunctionBuilder,
     params: impl IntoIterator<Item = wasmparser::ValType>,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<ir::Block> {
+) -> crate::Result<ir::Block> {
     let block = builder.create_block();
     for ty in params {
         match ty {
@@ -129,4 +131,26 @@ pub fn f64_translation(x: wasmparser::Ieee64) -> ir::immediates::Ieee64 {
 pub fn get_vmctx_value_label() -> ir::ValueLabel {
     const VMCTX_LABEL: u32 = 0xffff_fffe;
     ir::ValueLabel::from_u32(VMCTX_LABEL)
+}
+
+pub(crate) trait HashMapEntryTryExt<'a, K, V, S>: Sized {
+    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
+    where
+        K: Hash,
+        S: BuildHasher;
+}
+
+impl<'a, K, V, S, A: Allocator> HashMapEntryTryExt<'a, K, V, S>
+    for hashbrown::hash_map::Entry<'a, K, V, S, A>
+{
+    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            hashbrown::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+            hashbrown::hash_map::Entry::Vacant(entry) => Ok(entry.insert(default()?)),
+        }
+    }
 }

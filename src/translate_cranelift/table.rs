@@ -1,3 +1,5 @@
+use crate::translate_cranelift::TranslationEnvironment;
+use crate::traps::TRAP_TABLE_OUT_OF_BOUNDS;
 use cranelift_codegen::cursor::FuncCursor;
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::condcodes::IntCC;
@@ -23,9 +25,10 @@ impl TranslatedTable {
     pub fn prepare_addr(
         &self,
         builder: &mut FunctionBuilder,
-        mut index: ir::Value,
-        addr_ty: ir::Type,
+        index: ir::Value,
+        _addr_ty: ir::Type,
         enable_table_access_spectre_mitigation: bool,
+        env: &mut TranslationEnvironment,
     ) -> (ir::Value, ir::MemFlags) {
         let index_ty = builder.func.dfg.value_type(index);
 
@@ -38,7 +41,7 @@ impl TranslatedTable {
             .icmp(IntCC::UnsignedGreaterThanOrEqual, index, bound);
 
         if !enable_table_access_spectre_mitigation {
-            builder.ins().trapnz(oob, ir::TrapCode::TableOutOfBounds);
+            env.trapnz(builder, oob, TRAP_TABLE_OUT_OF_BOUNDS);
         }
 
         todo!()
@@ -50,7 +53,7 @@ impl TranslatedTable {
 pub enum TranslatedTableKind {
     /// Non-resizable table.
     Static {
-        /// Non-resizable tables have a constant size known at compile time.
+        /// Non-resizable tables have a constant size known at compile_cranelift time.
         bound: u32,
     },
     /// Resizable table.

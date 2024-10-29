@@ -1,13 +1,7 @@
-mod code_translator;
 mod const_expr;
-mod env;
-mod func_translator;
-mod heap;
-mod module_translator;
-mod state;
-mod table;
-mod utils;
+mod module_parser;
 
+use crate::errors::SizeOverflow;
 use crate::indices::{
     DataIndex, DefinedFuncIndex, DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex,
     ElemIndex, EntityIndex, FieldIndex, FuncIndex, FuncRefIndex, GlobalIndex, LabelIndex,
@@ -16,50 +10,64 @@ use crate::indices::{
 use crate::{enum_accessors, DEFAULT_OFFSET_GUARD_SIZE, WASM32_MAX_SIZE};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use cranelift_codegen::ir;
-use cranelift_codegen::ir::InstBuilder;
+pub use const_expr::{ConstExpr, ConstOp};
+use core::fmt;
 use cranelift_entity::packed_option::ReservedValue;
-use cranelift_entity::{entity_impl, EntityRef, PrimaryMap};
-use hashbrown::{HashMap, HashSet};
+use cranelift_entity::{EntitySet, PrimaryMap};
+use hashbrown::HashMap;
+pub use module_parser::ModuleParser;
 use serde_derive::{Deserialize, Serialize};
+use std::ops::Range;
+use wasmparser::collections::IndexMap;
 use wasmparser::{
-    FuncToValidate, FuncType, FunctionBody, GlobalType, MemoryType, TableType, ValidatorResources,
-    WasmFeatures,
+    FuncToValidate, FuncType, FunctionBody, GlobalType, MemoryType, TableType, TagType,
+    ValidatorResources, WasmFeatures,
 };
 
-use crate::errors::SizeOverflow;
-pub use const_expr::{ConstExpr, ConstOp};
-pub use env::TranslationEnvironment;
-pub use func_translator::FuncTranslator;
-pub use module_translator::ModuleTranslator;
-
 #[derive(Debug)]
-pub struct Translation<'wasm> {
-    pub module: TranslatedModule<'wasm>,
+pub struct ParsingResult<'wasm> {
+    pub module: ParsedModule,
     pub debug_info: DebugInfo<'wasm>,
     pub required_features: WasmFeatures,
-    pub func_compile_inputs: PrimaryMap<DefinedFuncIndex, FuncCompileInput<'wasm>>,
+    pub function_bodies: PrimaryMap<DefinedFuncIndex, CompileInput<'wasm>>,
+    /// List of data segments found in this module which should be concatenated
+    /// together for the final compiled artifact.
+    ///
+    /// These data segments, when concatenated, are indexed by the
+    /// `MemoryInitializer` type.
+    pub data: Vec<&'wasm [u8]>,
+    /// Total size of all data pushed onto `data` so far.
+    total_data: u32,
+    /// List of passive element segments found in this module which will get
+    /// concatenated for the final artifact.
+    pub passive_data: Vec<&'wasm [u8]>,
+    /// Total size of all passive data pushed into `passive_data` so far.
+    total_passive_data: u32,
 }
 
-impl Default for Translation<'_> {
+impl Default for ParsingResult<'_> {
     fn default() -> Self {
         Self {
-            module: TranslatedModule::default(),
+            module: ParsedModule::default(),
             debug_info: DebugInfo::default(),
             required_features: WasmFeatures::empty(),
-            func_compile_inputs: PrimaryMap::default(),
+            function_bodies: PrimaryMap::default(),
+            data: Vec::new(),
+            total_data: 0,
+            passive_data: Vec::new(),
+            total_passive_data: 0,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct FuncCompileInput<'wasm> {
+pub struct CompileInput<'wasm> {
     pub body: FunctionBody<'wasm>,
     pub validator: FuncToValidate<ValidatorResources>,
 }
 
 #[derive(Debug, Default)]
-pub struct TranslatedModule<'wasm> {
+pub struct ParsedModule {
     pub types: PrimaryMap<TypeIndex, FuncType>,
 
     pub functions: PrimaryMap<FuncIndex, FunctionType>,
@@ -75,16 +83,16 @@ pub struct TranslatedModule<'wasm> {
     // each executed *active* element during initialization, our approach is a bit cleaner IMO.
     pub global_initializers: PrimaryMap<DefinedGlobalIndex, ConstExpr>,
     pub table_initializers: TableInitializers,
-    pub memory_initializers: Vec<MemoryInitializer<'wasm>>,
+    pub memory_initializers: Vec<MemoryInitializer>,
 
     pub passive_table_initializers: HashMap<ElemIndex, TableSegmentElements>,
-    pub passive_memory_initializers: HashMap<DataIndex, &'wasm [u8]>,
-    pub active_table_initializers: HashSet<ElemIndex>,
-    pub active_memory_initializers: HashSet<DataIndex>,
+    pub passive_memory_initializers: HashMap<DataIndex, Range<u32>>,
+    pub active_table_initializers: EntitySet<ElemIndex>,
+    pub active_memory_initializers: EntitySet<DataIndex>,
 
     pub start: Option<FuncIndex>,
-    pub imports: Vec<Import<'wasm>>,
-    pub exports: HashMap<&'wasm str, EntityIndex>,
+    pub imports: Vec<Import>,
+    pub exports: IndexMap<String, EntityIndex>,
 
     pub num_imported_functions: u32,
     pub num_imported_tables: u32,
@@ -93,7 +101,7 @@ pub struct TranslatedModule<'wasm> {
     pub num_escaped_functions: u32,
 }
 
-impl TranslatedModule<'_> {
+impl ParsedModule {
     #[inline]
     pub fn func_index(&self, index: DefinedFuncIndex) -> FuncIndex {
         FuncIndex::from_u32(self.num_imported_functions + index.as_u32())
@@ -199,48 +207,40 @@ impl TranslatedModule<'_> {
     }
 }
 
-/// The value of a WebAssembly global variable.
-#[derive(Clone, Copy)]
-pub enum IRGlobal {
-    /// This is a constant global with a value known at compile time.
-    Const(ir::Value),
-
-    /// This is a variable in memory that should be referenced through a `GlobalValue`.
-    Memory {
-        /// The address of the global variable storage.
-        gv: ir::GlobalValue,
-        /// An offset to add to the address.
-        offset: ir::immediates::Offset32,
-        /// The global variable's type.
-        ty: ir::Type,
-    },
-
-    /// This is a global variable that needs to be handled by the environment.
-    Custom,
-}
-
 #[derive(Debug)]
 pub enum EntityType {
     /// A function
-    Function(FuncIndex),
+    Function(FuncType),
     /// A table with the specified element type and limits
-    Table(TableIndex),
+    Table(TableType),
     /// A linear memory with the specified limits
-    Memory(MemoryIndex),
+    Memory(MemoryType),
     /// A global variable with the specified content type
-    Global(GlobalIndex),
+    Global(GlobalType),
     /// An event definition.
-    Tag(TagIndex),
+    Tag(TagType),
+}
+
+impl fmt::Display for EntityType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EntityType::Function(_) => f.write_str("function"),
+            EntityType::Table(_) => f.write_str("table"),
+            EntityType::Memory(_) => f.write_str("memory"),
+            EntityType::Global(_) => f.write_str("global"),
+            EntityType::Tag(_) => f.write_str("tag"),
+        }
+    }
 }
 
 impl EntityType {
     enum_accessors! {
         e
-        (Function(FuncIndex) func unwrap_func *e)
-        (Table(TableIndex) table unwrap_table *e)
-        (Memory(MemoryIndex) memory unwrap_memory *e)
-        (Global(GlobalIndex) global unwrap_global *e)
-        (Tag(TagIndex) tag unwrap_tag *e)
+        (Function(FuncType) func unwrap_func e.clone())
+        (Table(TableType) table unwrap_table *e)
+        (Memory(MemoryType) memory unwrap_memory *e)
+        (Global(GlobalType) global unwrap_global *e)
+        (Tag(TagType) tag unwrap_tag *e)
     }
 }
 
@@ -260,9 +260,9 @@ impl FunctionType {
 }
 
 #[derive(Debug)]
-pub struct Import<'wasm> {
-    pub module: &'wasm str,
-    pub name: &'wasm str,
+pub struct Import {
+    pub module: String,
+    pub name: String,
     pub ty: EntityType,
 }
 
@@ -416,16 +416,18 @@ pub enum TableSegmentElements {
 }
 
 #[derive(Debug)]
-pub struct MemoryInitializer<'wasm> {
+pub struct MemoryInitializer {
     pub memory_index: MemoryIndex,
     pub offset: ConstExpr,
-    pub bytes: &'wasm [u8],
+    pub data: Range<u32>,
 }
 
 #[derive(Debug, Default)]
 pub struct DebugInfo<'wasm> {
     pub names: Names<'wasm>,
     pub producers: Producers<'wasm>,
+    /// The offset of the code section in the original wasm file, used to calculate lookup values into the DWARF.
+    pub code_section_offset: u64,
     pub dwarf: gimli::Dwarf<gimli::EndianSlice<'wasm, gimli::LittleEndian>>,
     pub debug_loc: gimli::DebugLoc<gimli::EndianSlice<'wasm, gimli::LittleEndian>>,
     pub debug_loclists: gimli::DebugLocLists<gimli::EndianSlice<'wasm, gimli::LittleEndian>>,

@@ -1,12 +1,13 @@
 use crate::indices::{
     DataIndex, ElemIndex, FuncIndex, GlobalIndex, MemoryIndex, TableIndex, TypeIndex,
 };
-use crate::translate::heap::Reachability;
-use crate::translate::state::{ControlStackFrame, ElseData, FuncTranslationState};
-use crate::translate::utils::{
+use crate::translate_cranelift::heap::Reachability;
+use crate::translate_cranelift::state::{ControlStackFrame, ElseData, FuncTranslationState};
+use crate::translate_cranelift::utils::{
     block_with_params, blocktype_params_results, f32_translation, f64_translation,
 };
-use crate::translate::{IRGlobal, TranslationEnvironment};
+use crate::translate_cranelift::{IRGlobal, TranslationEnvironment};
+use crate::traps::{TRAP_NULL_REFERENCE, TRAP_UNREACHABLE};
 use crate::wasm_unsupported;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -17,7 +18,8 @@ use cranelift_codegen::ir::types::{
     F32, F32X4, F64, F64X2, I16, I16X8, I32, I32X4, I64, I64X2, I8, I8X16,
 };
 use cranelift_codegen::ir::{
-    AtomicRmwOp, ConstantData, InstBuilder, JumpTableData, MemFlags, Type, Value, ValueLabel,
+    AtomicRmwOp, ConstantData, InstBuilder, JumpTableData, MemFlags, TrapCode, Type, Value,
+    ValueLabel,
 };
 use cranelift_entity::packed_option::ReservedValue;
 use cranelift_frontend::{FunctionBuilder, Variable};
@@ -50,7 +52,7 @@ pub fn translate_operator(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     if !state.reachable {
         translate_unreachable_operator(validator, op, builder, state, env)?;
         return Ok(());
@@ -62,7 +64,7 @@ pub fn translate_operator(
     // This big match treats all Wasm code operators.
     match op {
         Operator::Unreachable => {
-            builder.ins().trap(ir::TrapCode::UnreachableCodeReached);
+            env.trap(builder, TRAP_UNREACHABLE);
             state.reachable = false;
         }
         Operator::Nop => {
@@ -72,19 +74,6 @@ pub fn translate_operator(
             state.pop1();
         }
         Operator::Select => {
-            let (mut arg1, mut arg2, cond) = state.pop3();
-            if builder.func.dfg.value_type(arg1).is_vector() {
-                arg1 = optionally_bitcast_vector(arg1, I8X16, builder);
-            }
-            if builder.func.dfg.value_type(arg2).is_vector() {
-                arg2 = optionally_bitcast_vector(arg2, I8X16, builder);
-            }
-            state.push1(builder.ins().select(cond, arg1, arg2));
-        }
-        Operator::TypedSelect { ty: _ } => {
-            // We ignore the explicit type parameter as it is only needed for
-            // validation, which we require to have been performed before
-            // translation.
             let (mut arg1, mut arg2, cond) = state.pop3();
             if builder.func.dfg.value_type(arg1).is_vector() {
                 arg1 = optionally_bitcast_vector(arg1, I8X16, builder);
@@ -180,7 +169,7 @@ pub fn translate_operator(
             // - either the If does not have a Else clause, in that case ty = EmptyBlock
             //   and we add nothing;
             // - either the If have an Else clause, in that case the destination of this jump
-            //   instruction will be changed later when we translate the Else operator.
+            //   instruction will be changed later when we parse the Else operator.
             state.push_if(
                 destination,
                 else_data,
@@ -1222,7 +1211,7 @@ pub fn translate_operator(
                 let offset = builder.ins().iconst(index_type, memarg.offset as i64);
                 builder
                     .ins()
-                    .uadd_overflow_trap(addr, offset, ir::TrapCode::HeapOutOfBounds)
+                    .uadd_overflow_trap(addr, offset, TrapCode::HEAP_OUT_OF_BOUNDS)
             };
             // `fn translate_atomic_wait` can inspect the type of `expected` to figure out what
             // code it needs to generate, if it wants.
@@ -1247,7 +1236,7 @@ pub fn translate_operator(
                 let offset = builder.ins().iconst(index_type, memarg.offset as i64);
                 builder
                     .ins()
-                    .uadd_overflow_trap(addr, offset, ir::TrapCode::HeapOutOfBounds)
+                    .uadd_overflow_trap(addr, offset, TrapCode::HEAP_OUT_OF_BOUNDS)
             };
             let res =
                 env.translate_atomic_notify(builder.cursor(), heap_index, effective_addr, count)?;
@@ -2356,7 +2345,7 @@ pub fn translate_operator(
         Operator::RefAsNonNull => {
             let r = state.pop1();
             let is_null = env.translate_ref_is_null(builder.cursor(), r)?;
-            builder.ins().trapnz(is_null, ir::TrapCode::NullReference);
+            env.trapnz(builder, is_null, TRAP_NULL_REFERENCE);
             state.push1(r);
         }
         Operator::BrOnNull { relative_depth } => {
@@ -2556,7 +2545,7 @@ fn translate_unreachable_operator(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     debug_assert!(!state.reachable);
     match *op {
         Operator::If { blockty } => {
@@ -2679,7 +2668,7 @@ fn translate_unreachable_operator(
             }
         }
         _ => {
-            // We don't translate because this is unreachable code
+            // We don't parse because this is unreachable code
         }
     }
 
@@ -2696,7 +2685,7 @@ fn translate_load(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<Reachability<()>> {
+) -> crate::Result<Reachability<()>> {
     let memory_index = MemoryIndex::from_u32(memarg.memory);
     let index = state.pop1();
     let mem_op_size = mem_op_size(opcode, result_ty);
@@ -2723,7 +2712,7 @@ fn translate_store(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     let memory_index = MemoryIndex::from_u32(memarg.memory);
     let val = state.pop1();
     let index = state.pop1();
@@ -2750,7 +2739,7 @@ fn translate_atomic_rmw(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     todo!()
 }
 
@@ -2761,7 +2750,7 @@ fn translate_atomic_cas(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     todo!()
 }
 
@@ -2772,7 +2761,7 @@ fn translate_atomic_load(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     todo!()
 }
 
@@ -2782,7 +2771,7 @@ fn translate_atomic_store(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     todo!()
 }
 
@@ -3273,7 +3262,7 @@ impl<A, IA: Iterator<Item = A>, B, IB: Iterator<Item = B>> Iterator for ZipEq<A,
 
 /// A helper for bitcasting a sequence of return values for the function currently being built. If
 /// a value is a vector type that does not match its expected type, this will modify the value in
-/// place to point to the result of a `bitcast`. This conversion is necessary to translate Wasm
+/// place to point to the result of a `bitcast`. This conversion is necessary to parse Wasm
 /// code that uses `V128` as function parameters (or implicitly in block parameters) and still use
 /// specific CLIF types (e.g. `I32X4`) in the function body.
 pub fn bitcast_wasm_returns(

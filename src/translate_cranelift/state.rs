@@ -1,9 +1,7 @@
-use super::{FuncIndex, GlobalIndex, IRGlobal, TypeIndex};
-use crate::indices::{MemoryIndex, TableIndex};
-use crate::translate::env::TranslationEnvironment;
-use crate::translate::heap::IRHeap;
-use crate::translate::table::TranslatedTable;
-use crate::utils::HashMapEntryTryExt;
+use super::{FuncIndex, GlobalIndex, IRGlobal, TranslationEnvironment, TypeIndex};
+use crate::indices::MemoryIndex;
+use crate::translate_cranelift::heap::IRHeap;
+use crate::translate_cranelift::utils::HashMapEntryTryExt;
 use alloc::vec::Vec;
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{Block, FuncRef, Function, Inst, SigRef, Value};
@@ -250,14 +248,16 @@ impl FuncTranslationState {
         }
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         debug_assert!(self.stack.is_empty());
         debug_assert!(self.control_stack.is_empty());
         self.reachable = true;
-        self.globals.clear();
-        // self.memory_to_heap.clear();
+
         self.signatures.clear();
         self.functions.clear();
+        self.globals.clear();
+        // tables: HashMap::new(),
+        self.memories.clear();
     }
 
     /// Initialize the state for compiling a function with the given signature.
@@ -413,7 +413,7 @@ impl FuncTranslationState {
         func: &mut Function,
         global_index: GlobalIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::TranslationResult<IRGlobal> {
+    ) -> crate::Result<IRGlobal> {
         self.globals
             .entry(global_index)
             .or_try_insert_with(|| env.make_global(func, global_index))
@@ -425,7 +425,7 @@ impl FuncTranslationState {
         func: &mut Function,
         memory_index: MemoryIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::TranslationResult<&'_ mut IRHeap> {
+    ) -> crate::Result<&'_ mut IRHeap> {
         self.memories
             .entry(memory_index)
             .or_try_insert_with(|| env.make_heap(func, memory_index))
@@ -436,7 +436,7 @@ impl FuncTranslationState {
         func: &mut Function,
         func_index: FuncIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::TranslationResult<(FuncRef, usize)> {
+    ) -> crate::Result<(FuncRef, usize)> {
         match self.functions.entry(func_index) {
             Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(entry) => {
@@ -452,7 +452,7 @@ impl FuncTranslationState {
         func: &mut Function,
         sig_index: TypeIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::TranslationResult<(SigRef, usize)> {
+    ) -> crate::Result<(SigRef, usize)> {
         match self.signatures.entry(sig_index) {
             Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(entry) => {

@@ -2,17 +2,16 @@ use crate::indices::{
     DataIndex, ElemIndex, FieldIndex, FuncIndex, FuncRefIndex, GlobalIndex, LocalIndex,
     MemoryIndex, TableIndex, TagIndex, TypeIndex,
 };
-use crate::translate::const_expr::ConstExpr;
-use crate::translate::{
-    EntityIndex, EntityType, FuncCompileInput, FunctionType, Import, LabelIndex, MemoryInitializer,
-    MemoryPlan, ProducersLanguage, ProducersLanguageField, ProducersSdk, ProducersSdkField,
-    ProducersTool, ProducersToolField, TableInitialValue, TablePlan, TableSegment,
-    TableSegmentElements, Translation,
+use crate::parse::const_expr::ConstExpr;
+use crate::parse::{
+    CompileInput, EntityIndex, EntityType, FunctionType, Import, LabelIndex, MemoryInitializer,
+    MemoryPlan, ParsingResult, ProducersLanguage, ProducersLanguageField, ProducersSdk,
+    ProducersSdkField, ProducersTool, ProducersToolField, TableInitialValue, TablePlan,
+    TableSegment, TableSegmentElements,
 };
 use crate::wasm_unsupported;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::mem;
 use cranelift_entity::packed_option::ReservedValue;
 use hashbrown::HashMap;
 use wasmparser::{
@@ -24,32 +23,32 @@ use wasmparser::{
 };
 use wasmparser::{Name, ProducersFieldValue};
 
-pub struct ModuleTranslator<'a, 'wasm> {
-    result: Translation<'wasm>,
+pub struct ModuleParser<'a, 'wasm> {
+    result: ParsingResult<'wasm>,
     validator: &'a mut Validator,
 }
 
-impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
+impl<'a, 'wasm> ModuleParser<'a, 'wasm> {
     pub fn new(validator: &'a mut Validator) -> Self {
         Self {
-            result: Translation::default(),
+            result: ParsingResult::default(),
             validator,
         }
     }
 
-    pub fn translate(mut self, data: &'wasm [u8]) -> crate::TranslationResult<Translation<'wasm>> {
+    pub fn parse(mut self, data: &'wasm [u8]) -> crate::Result<ParsingResult<'wasm>> {
         let mut parser = Parser::default();
         parser.set_features(*self.validator.features());
 
         for payload in parser.parse_all(data) {
-            self.translate_payload(payload?)?;
+            self.parse_payload(payload?)?;
         }
 
         self.validator.reset();
         Ok(self.result)
     }
 
-    pub fn translate_payload(&mut self, payload: Payload<'wasm>) -> crate::TranslationResult<()> {
+    pub fn parse_payload(&mut self, payload: Payload<'wasm>) -> crate::Result<()> {
         match payload {
             Payload::Version {
                 num,
@@ -63,35 +62,35 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
             }
             Payload::TypeSection(types) => {
                 self.validator.type_section(&types)?;
-                self.read_type_section(types)?;
+                self.parse_type_section(types)?;
             }
             Payload::ImportSection(imports) => {
                 self.validator.import_section(&imports)?;
-                self.read_import_section(imports)?;
+                self.parse_import_section(imports)?;
             }
             Payload::FunctionSection(functions) => {
                 self.validator.function_section(&functions)?;
-                self.read_function_section(functions)?;
+                self.parse_function_section(functions)?;
             }
             Payload::TableSection(tables) => {
                 self.validator.table_section(&tables)?;
-                self.read_table_section(tables)?;
+                self.parse_table_section(tables)?;
             }
             Payload::MemorySection(memories) => {
                 self.validator.memory_section(&memories)?;
-                self.read_memory_section(memories)?;
+                self.parse_memory_section(memories)?;
             }
             Payload::TagSection(tags) => {
                 self.validator.tag_section(&tags)?;
-                self.read_tag_section(tags)?;
+                self.parse_tag_section(tags)?;
             }
             Payload::GlobalSection(globals) => {
                 self.validator.global_section(&globals)?;
-                self.read_global_section(globals)?;
+                self.parse_global_section(globals)?;
             }
             Payload::ExportSection(exports) => {
                 self.validator.export_section(&exports)?;
-                self.read_export_section(exports)?;
+                self.parse_export_section(exports)?;
             }
             Payload::StartSection { func, range } => {
                 self.validator.start_section(func, &range)?;
@@ -99,32 +98,31 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
             }
             Payload::ElementSection(elements) => {
                 self.validator.element_section(&elements)?;
-                self.read_element_section(elements)?;
+                self.parse_element_section(elements)?;
             }
             Payload::DataCountSection { count, range } => {
                 self.validator.data_count_section(count, &range)?;
             }
             Payload::DataSection(section) => {
                 self.validator.data_section(&section)?;
-                self.read_data_section(section)?;
+                self.parse_data_section(section)?;
             }
             Payload::CodeSectionStart { count, range, .. } => {
                 self.validator.code_section_start(count, &range)?;
-                self.result
-                    .func_compile_inputs
-                    .reserve_exact(count as usize);
+                self.result.function_bodies.reserve_exact(count as usize);
+                self.result.debug_info.code_section_offset = range.start as u64;
             }
             Payload::CodeSectionEntry(body) => {
                 let validator = self.validator.code_section_entry(&body)?;
                 self.result
-                    .func_compile_inputs
-                    .push(FuncCompileInput { body, validator });
+                    .function_bodies
+                    .push(CompileInput { body, validator });
             }
             Payload::CustomSection(sec) if sec.name() == "target_features" => {
-                self.read_target_feature_section(&sec);
+                self.parse_target_feature_section(&sec);
             }
             Payload::CustomSection(sec) if sec.name() == "name" => {
-                self.read_name_section(NameSectionReader::new(BinaryReader::new(
+                self.parse_name_section(NameSectionReader::new(BinaryReader::new(
                     sec.data(),
                     sec.data_offset(),
                 )))?;
@@ -136,7 +134,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
                     *self.validator.features(),
                 ))?;
 
-                self.read_producers_section(reader)?;
+                self.parse_producers_section(reader)?;
             }
             Payload::CustomSection(sec) => {
                 let name = sec.name().trim_end_matches(".dwo");
@@ -144,7 +142,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
                     tracing::warn!("unhandled custom section {sec:?}");
                     return Ok(());
                 }
-                self.read_dwarf_section(name, &sec);
+                self.parse_dwarf_section(name, &sec);
             }
             Payload::ModuleSection { .. }
             | Payload::InstanceSection(_)
@@ -175,10 +173,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         self.result.module.num_escaped_functions += 1;
     }
 
-    fn read_type_section(
-        &mut self,
-        types: TypeSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_type_section(&mut self, types: TypeSectionReader<'wasm>) -> crate::Result<()> {
         let count = types.count();
         self.result.module.types.reserve_exact(count as usize);
 
@@ -189,10 +184,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_import_section(
-        &mut self,
-        imports: ImportSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_import_section(&mut self, imports: ImportSectionReader<'wasm>) -> crate::Result<()> {
         self.result
             .module
             .imports
@@ -208,29 +200,31 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
                         func_ref: FuncRefIndex::reserved_value(),
                     });
                     self.result.module.num_imported_functions += 1;
-                    EntityType::Function(index)
+                    EntityType::Function(
+                        self.result.module.types[self.result.module.functions[index].signature]
+                            .clone(),
+                    )
                 }
                 TypeRef::Table(ty) => {
                     self.result.module.num_imported_tables += 1;
-                    EntityType::Table(
-                        self.result
-                            .module
-                            .table_plans
-                            .push(TablePlan::for_table(ty)),
-                    )
+                    self.result
+                        .module
+                        .table_plans
+                        .push(TablePlan::for_table(ty));
+                    EntityType::Table(ty)
                 }
                 TypeRef::Memory(ty) => {
                     self.result.module.num_imported_memories += 1;
-                    EntityType::Memory(
-                        self.result
-                            .module
-                            .memory_plans
-                            .push(MemoryPlan::for_memory(ty)),
-                    )
+                    self.result
+                        .module
+                        .memory_plans
+                        .push(MemoryPlan::for_memory(ty));
+                    EntityType::Memory(ty)
                 }
                 TypeRef::Global(ty) => {
                     self.result.module.num_imported_globals += 1;
-                    EntityType::Global(self.result.module.globals.push(ty))
+                    self.result.module.globals.push(ty);
+                    EntityType::Global(ty)
                 }
 
                 // doesn't get past validation
@@ -238,8 +232,8 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
             };
 
             self.result.module.imports.push(Import {
-                module: import.module,
-                name: import.name,
+                module: import.module.to_string(),
+                name: import.name.to_string(),
                 ty,
             });
         }
@@ -247,10 +241,10 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_function_section(
+    fn parse_function_section(
         &mut self,
         functions: FunctionSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         self.result
             .module
             .functions
@@ -267,10 +261,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_table_section(
-        &mut self,
-        tables: TableSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_table_section(&mut self, tables: TableSectionReader<'wasm>) -> crate::Result<()> {
         self.result
             .module
             .table_plans
@@ -308,10 +299,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_memory_section(
-        &mut self,
-        memories: MemorySectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_memory_section(&mut self, memories: MemorySectionReader<'wasm>) -> crate::Result<()> {
         self.result
             .module
             .memory_plans
@@ -327,14 +315,11 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_tag_section(&self, _tags: TagSectionReader<'wasm>) -> crate::TranslationResult<()> {
+    fn parse_tag_section(&self, _tags: TagSectionReader<'wasm>) -> crate::Result<()> {
         Err(wasm_unsupported!("exception handling"))
     }
 
-    fn read_global_section(
-        &mut self,
-        globals: GlobalSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_global_section(&mut self, globals: GlobalSectionReader<'wasm>) -> crate::Result<()> {
         self.result
             .module
             .globals
@@ -358,10 +343,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_export_section(
-        &mut self,
-        exports: ExportSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_export_section(&mut self, exports: ExportSectionReader<'wasm>) -> crate::Result<()> {
         for export in exports {
             let export = export?;
             let index = match export.kind {
@@ -413,16 +395,19 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
                 }
             };
 
-            self.result.module.exports.insert(export.name, index);
+            self.result
+                .module
+                .exports
+                .insert(export.name.to_string(), index);
         }
 
         Ok(())
     }
 
-    fn read_element_section(
+    fn parse_element_section(
         &mut self,
         elements: ElementSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         for (elem_index, element) in elements.into_iter().enumerate() {
             let element = element?;
             let elem_index = ElemIndex::from_u32(elem_index as u32);
@@ -485,13 +470,25 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_data_section(
-        &mut self,
-        section: DataSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_data_section(&mut self, section: DataSectionReader<'wasm>) -> crate::Result<()> {
         for (data_index, entry) in section.into_iter().enumerate() {
             let entry = entry?;
             let data_index = DataIndex::from_u32(data_index as u32);
+
+            let mk_range = |total: &mut u32| -> crate::Result<_> {
+                let range = u32::try_from(entry.data.len())
+                    .ok()
+                    .and_then(|size| {
+                        let start = *total;
+                        let end = start.checked_add(size)?;
+                        Some(start..end)
+                    })
+                    .ok_or_else(|| {
+                        wasm_unsupported!("more than 4 gigabytes of data in wasm module")
+                    })?;
+                *total += range.end - range.start;
+                Ok(range)
+            };
 
             match entry.kind {
                 DataKind::Active {
@@ -502,24 +499,29 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
                     let (offset, escaped) = ConstExpr::from_wasmparser(offset_expr)?;
                     debug_assert!(escaped.is_empty());
 
+                    let range = mk_range(&mut self.result.total_data)?;
+
                     self.result
                         .module
                         .memory_initializers
                         .push(MemoryInitializer {
                             memory_index,
                             offset,
-                            bytes: entry.data,
+                            data: range,
                         });
+                    self.result.data.push(entry.data.into());
                     self.result
                         .module
                         .active_memory_initializers
                         .insert(data_index);
                 }
                 DataKind::Passive => {
+                    let range = mk_range(&mut self.result.total_passive_data)?;
+                    self.result.passive_data.push(entry.data.into());
                     self.result
                         .module
                         .passive_memory_initializers
-                        .insert(data_index, entry.data);
+                        .insert(data_index, range);
                 }
             }
         }
@@ -527,7 +529,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_target_feature_section(&mut self, section: &CustomSectionReader<'wasm>) {
+    fn parse_target_feature_section(&mut self, section: &CustomSectionReader<'wasm>) {
         let mut r = BinaryReader::new_features(
             section.data(),
             section.data_offset(),
@@ -574,15 +576,12 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         self.result.required_features = required_features;
     }
 
-    fn read_name_section(
-        &mut self,
-        reader: NameSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    fn parse_name_section(&mut self, reader: NameSectionReader<'wasm>) -> crate::Result<()> {
         for subsection in reader {
             fn for_each_direct_name<'wasm>(
                 names: NameMap<'wasm>,
                 mut f: impl FnMut(u32, &'wasm str),
-            ) -> crate::TranslationResult<()> {
+            ) -> crate::Result<()> {
                 for name in names {
                     let name = name?;
 
@@ -596,7 +595,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
                 names: IndirectNameMap<'wasm>,
                 mut f1: impl FnMut(&mut HashMap<I, &'wasm str>, u32, &'wasm str),
                 mut f2: impl FnMut(HashMap<I, &'wasm str>, u32),
-            ) -> crate::TranslationResult<()> {
+            ) -> crate::Result<()> {
                 for naming in names {
                     let name = naming?;
                     let mut result = HashMap::default();
@@ -757,10 +756,10 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_producers_section(
+    fn parse_producers_section(
         &mut self,
         section: ProducersSectionReader<'wasm>,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         for field in section {
             let field = field?;
             match field.name {
@@ -831,7 +830,7 @@ impl<'a, 'wasm> ModuleTranslator<'a, 'wasm> {
         Ok(())
     }
 
-    fn read_dwarf_section(&mut self, name: &'wasm str, section: &CustomSectionReader<'wasm>) {
+    fn parse_dwarf_section(&mut self, name: &'wasm str, section: &CustomSectionReader<'wasm>) {
         let endian = gimli::LittleEndian;
         let data = section.data();
         let slice = gimli::EndianSlice::new(data, endian);

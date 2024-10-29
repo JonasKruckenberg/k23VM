@@ -1,7 +1,7 @@
-use crate::translate::code_translator::{bitcast_wasm_returns, translate_operator};
-use crate::translate::env::TranslationEnvironment;
-use crate::translate::state::FuncTranslationState;
-use crate::translate::utils::get_vmctx_value_label;
+use crate::translate_cranelift::code_translator::{bitcast_wasm_returns, translate_operator};
+use crate::translate_cranelift::state::FuncTranslationState;
+use crate::translate_cranelift::utils::get_vmctx_value_label;
+use crate::translate_cranelift::TranslationEnvironment;
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{InstBuilder, ValueLabel};
 use cranelift_entity::EntityRef;
@@ -30,13 +30,13 @@ impl FuncTranslator {
     pub fn translate_body(
         &mut self,
         validator: &mut FuncValidator<impl WasmModuleResources>,
-        body: FunctionBody<'_>,
+        body: &FunctionBody<'_>,
         func: &mut ir::Function,
         env: &mut TranslationEnvironment,
-    ) -> crate::TranslationResult<()> {
+    ) -> crate::Result<()> {
         let mut reader = body.get_binary_reader();
         tracing::trace!(
-            "translate({} bytes, {}{})",
+            "parse({} bytes, {}{})",
             reader.bytes_remaining(),
             func.name,
             func.signature
@@ -113,7 +113,7 @@ fn parse_local_decls(
     num_params: usize,
     validator: &mut FuncValidator<impl WasmModuleResources>,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     let mut next_local = num_params;
     let local_count = reader.read_var_u32()?;
 
@@ -140,7 +140,7 @@ fn declare_locals(
     wasm_type: wasmparser::ValType,
     next_local: &mut usize,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     // All locals are initialized to 0.
     use wasmparser::ValType::*;
     let (ty, init, needs_stack_map) = match wasm_type {
@@ -209,7 +209,7 @@ fn parse_function_body(
     builder: &mut FunctionBuilder,
     state: &mut FuncTranslationState,
     env: &mut TranslationEnvironment,
-) -> crate::TranslationResult<()> {
+) -> crate::Result<()> {
     // The control stack is initialized with a single block representing the whole function.
     debug_assert_eq!(state.control_stack.len(), 1, "State not initialized");
 

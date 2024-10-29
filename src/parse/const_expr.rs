@@ -17,7 +17,7 @@ impl ConstExpr {
     /// indices that appeared in `ref.func` instructions, if any.
     pub fn from_wasmparser(
         expr: wasmparser::ConstExpr<'_>,
-    ) -> crate::TranslationResult<(Self, SmallVec<[FuncIndex; 1]>)> {
+    ) -> crate::Result<(Self, SmallVec<[FuncIndex; 1]>)> {
         let mut iter = expr
             .get_operators_reader()
             .into_iter_with_offsets()
@@ -73,10 +73,7 @@ pub enum ConstOp {
 
 impl ConstOp {
     /// Convert a `wasmparser::Operator` to a `ConstOp`.
-    pub fn from_wasmparser(
-        op: wasmparser::Operator<'_>,
-        offset: usize,
-    ) -> crate::TranslationResult<Self> {
+    pub fn from_wasmparser(op: wasmparser::Operator<'_>, offset: usize) -> crate::Result<Self> {
         use wasmparser::Operator as O;
         Ok(match op {
             O::I32Const { value } => Self::I32Const(value),
