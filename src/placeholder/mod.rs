@@ -1,5 +1,6 @@
 mod instance_allocator;
 mod mmap;
+mod setjmp;
 
 use crate::vm::CodeMemory;
 use std::collections::BTreeMap;
@@ -7,6 +8,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 pub use instance_allocator::PlaceholderAllocatorDontUse;
 pub use mmap::Mmap;
+pub use setjmp::{setjmp, longjmp, jmp_buf};
 
 fn global_code() -> &'static RwLock<GlobalRegistry> {
     static GLOBAL_CODE: OnceLock<RwLock<GlobalRegistry>> = OnceLock::new();

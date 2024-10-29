@@ -1,15 +1,9 @@
 use crate::vm::{FixedVMContextPlan, VMContext};
-use crate::Store;
 use std::cell::{Cell, UnsafeCell};
 use std::mem::MaybeUninit;
 use std::ptr;
 
 mod backtrace;
-
-mod sys {
-    // definitions for jmp_buf and sigjmp_buf types
-    include!(concat!(env!("OUT_DIR"), "/setjmp.rs"));
-}
 
 pub use backtrace::Backtrace;
 
@@ -29,7 +23,7 @@ where
     F: FnMut(*mut VMContext),
 {
     let result = CallThreadState::new(caller, vmctx_plan).with(|state| {
-        let r = unsafe { sys::setjmp(state.jmp_buf.as_ptr().cast()) };
+        let r = unsafe { crate::placeholder::setjmp(state.jmp_buf.as_ptr().cast()) };
         if r == 0 {
             closure(caller)
         }
@@ -89,7 +83,7 @@ std::thread_local! { static TLS: Cell<Option<*const CallThreadState >> = Cell::n
 
 struct CallThreadState {
     unwind: UnsafeCell<MaybeUninit<(UnwindReason, Option<Backtrace>)>>,
-    jmp_buf: Cell<sys::jmp_buf>,
+    jmp_buf: Cell<crate::placeholder::jmp_buf>,
     vmctx_plan: FixedVMContextPlan,
     vmctx: *mut VMContext,
     prev: Cell<*const CallThreadState>,
@@ -110,7 +104,7 @@ impl CallThreadState {
     pub fn new(vmctx: *mut VMContext, vmctx_plan: FixedVMContextPlan) -> Self {
         Self {
             unwind: UnsafeCell::new(MaybeUninit::uninit()),
-            jmp_buf: Cell::new(sys::jmp_buf::from([0; 48])),
+            jmp_buf: Cell::new(crate::placeholder::jmp_buf::from([0; 48])),
             vmctx,
             prev: Cell::new(ptr::null()),
             old_last_wasm_exit_fp: Cell::new(unsafe {
@@ -176,7 +170,7 @@ impl CallThreadState {
 
             (*self.unwind.get()).as_mut_ptr().write((reason, backtrace));
 
-            sys::longjmp(self.jmp_buf.as_ptr().cast(), 1);
+            crate::placeholder::longjmp(self.jmp_buf.as_ptr().cast(), 1);
         }
     }
 

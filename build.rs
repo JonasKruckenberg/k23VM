@@ -8,7 +8,7 @@ fn main() {
     // types. Do NOT generate bindings for the function declarations;
     // that's done below.
     let bindings = bindgen::Builder::default()
-        .header("setjmp-wrapper.h")
+        .header("src/placeholder/setjmp-wrapper.h")
         // we only want these two type definitions
         .allowlist_type("jmp_buf")
         .allowlist_function("setjmp")
