@@ -214,6 +214,10 @@ impl WastContext {
         let isa_builder = cranelift_codegen::isa::lookup(target_lexicon::HOST)?;
         let mut b = cranelift_codegen::settings::builder();
         b.set("opt_level", "speed_and_size")?;
+        b.set("libcall_call_conv", "isa_default")?;
+        b.set("preserve_frame_pointers", "true")?;
+        b.set("enable_probestack", "true")?;
+        b.set("probestack_strategy", "inline")?;
         let target_isa = isa_builder.finish(cranelift_codegen::settings::Flags::new(b))?;
 
         let ctx = WastContext {
@@ -387,12 +391,10 @@ impl WastContext {
         //         .unwrap()?;
         // }
 
-        tracing::info!("{directive:?}");
+        tracing::debug!("{directive:?}");
 
         match directive {
             WastDirective::Module(module) => self.wat(module, path, wat)?,
-            WastDirective::ModuleDefinition(_) => todo!(),
-            WastDirective::ModuleInstance { .. } => todo!(),
             WastDirective::Register { name, module, .. } => {
                 self.register(module.map(|s| s.name()), name)?;
             }
@@ -401,6 +403,7 @@ impl WastContext {
             }
             WastDirective::AssertMalformed { module, .. } => {
                 if let Ok(_) = self.wat(module, path, wat) {
+                    bail!("expected malformed module to fail to instantiate");
                 }
             }
             WastDirective::AssertInvalid {
@@ -451,9 +454,10 @@ impl WastContext {
                 let result = self.perform_invoke(call)?;
                 self.assert_trap(result, message)?;
             }
-            WastDirective::AssertSuspension { .. } => {}
-            WastDirective::Thread(_) => {}
-            WastDirective::Wait { .. } => {}
+            WastDirective::ModuleDefinition(_) |
+            WastDirective::ModuleInstance { .. } |
+            WastDirective::AssertException { .. } |
+            WastDirective::AssertSuspension { .. } |
             WastDirective::Thread(_) |
             WastDirective::Wait { .. } => todo!("unsupported wast directive {directive:?}")
         }
@@ -542,8 +546,7 @@ impl WastContext {
             WastExecute::Invoke(invoke) => self.perform_invoke(invoke),
             WastExecute::Wat(mut module) => Ok(match &mut module {
                 Wat::Module(m) => {
-                    let s: &'static [u8] = Box::leak(m.encode()?.into_boxed_slice());
-                    self.instantiate_module(s)?.map(|_| Vec::new())
+                    self.instantiate_module(&m.encode()?)?.map(|_| Vec::new())
                 }
                 _ => unimplemented!(),
             }),
