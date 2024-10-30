@@ -5,7 +5,7 @@ mod instance;
 mod memory;
 mod mmap_vec;
 mod table;
-mod trap_handling;
+pub mod trap_handling;
 mod vmcontext;
 
 use crate::parse::{MemoryPlan, ParsedModule, TablePlan};

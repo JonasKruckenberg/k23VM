@@ -32,7 +32,7 @@ impl Module {
         code.publish()?;
         let code = Arc::new(code);
 
-        // crate::trap::signals::register_code(&code);
+        crate::placeholder::register_code(&code);
 
         Ok(Self(Arc::new(ModuleInner {
             name: None,

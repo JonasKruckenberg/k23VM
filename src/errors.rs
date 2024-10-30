@@ -15,13 +15,15 @@ pub enum Error {
         /// The bytecode offset where the error occurred.
         offset: usize,
     },
+    /// Failed to parse DWARF debug information.
+    Gimli(gimli::Error),
+    /// Failed to parse a wat file.
+    Wat(wat::Error),
     /// Failed to compile a function.
     Cranelift {
         func_name: String,
         message: String,
     },
-    /// Failed to parse DWARF debug information.
-    Gimli(gimli::Error),
     /// The WebAssembly code used an unsupported feature.
     Unsupported(String),
     /// A WebAssembly trap ocurred.
@@ -70,15 +72,16 @@ impl fmt::Display for Error {
             Error::InvalidWebAssembly { message, offset } => {
                 f.write_fmt(format_args!("invalid WASM input at {offset}: {message}"))
             }
+            Error::Gimli(e) => {
+                f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
+            }
+            Error::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
             Error::Cranelift { func_name, message } => f.write_fmt(format_args!(
                 "failed to compile function {func_name}: {message}"
             )),
             Error::Unsupported(feature) => f.write_fmt(format_args!(
                 "Feature used by the WebAssembly code is not supported: {feature}"
             )),
-            Error::Gimli(e) => {
-                f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
-            }
             Error::Trap {
                 backtrace,
                 trap,

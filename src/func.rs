@@ -88,6 +88,8 @@ impl Func {
             )
         };
 
+        unsafe { crate::placeholder::register_signal_handler() };
+        
         let res = vm::catch_traps(
             vmctx,
             module.vmctx_plan().fixed.clone(),
@@ -99,7 +101,7 @@ impl Func {
         if let Err(trap) = res {
             let (faulting_pc, trap_code, message) = match trap.reason {
                 TrapReason::Wasm(trap_code) => (None, trap_code, "k23 builtin produced a trap"),
-                TrapReason::Cranelift {
+                TrapReason::Jit {
                     pc,
                     faulting_addr: _, // TODO make use of this
                     trap: trap_code,

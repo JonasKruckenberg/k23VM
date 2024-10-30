@@ -52,7 +52,7 @@ pub enum TrapReason {
     /// A trap raised from a wasm builtin
     Wasm(crate::traps::Trap),
     /// A trap raised from Cranelift-generated code.
-    Cranelift {
+    Jit {
         /// The program counter where this trap originated.
         ///
         /// This is later used with side tables from compilation to translate
@@ -79,11 +79,11 @@ enum UnwindReason {
     Trap(TrapReason),
 }
 
-std::thread_local! { static TLS: Cell<Option<*const CallThreadState >> = Cell::new(None) }
+std::thread_local! { pub static TLS: Cell<Option<*const CallThreadState >> = Cell::new(None) }
 
-struct CallThreadState {
+pub struct CallThreadState {
     unwind: UnsafeCell<MaybeUninit<(UnwindReason, Option<Backtrace>)>>,
-    jmp_buf: Cell<crate::placeholder::jmp_buf>,
+    pub jmp_buf: Cell<crate::placeholder::jmp_buf>,
     vmctx_plan: FixedVMContextPlan,
     vmctx: *mut VMContext,
     prev: Cell<*const CallThreadState>,
@@ -171,6 +171,25 @@ impl CallThreadState {
             (*self.unwind.get()).as_mut_ptr().write((reason, backtrace));
 
             crate::placeholder::longjmp(self.jmp_buf.as_ptr().cast(), 1);
+        }
+    }
+
+    pub(crate) fn set_jit_trap(
+        &self,
+        pc: usize, fp: usize,
+        faulting_addr: Option<usize>,
+        trap: crate::Trap,
+    ) {
+        let backtrace = unsafe { Backtrace::new_with_trap_state(self, Some((pc, fp))) };
+        unsafe {
+            (*self.unwind.get()).as_mut_ptr().write((
+                UnwindReason::Trap(TrapReason::Jit {
+                    pc,
+                    faulting_addr,
+                    trap,
+                }),
+                Some(backtrace),
+            ));
         }
     }
 
