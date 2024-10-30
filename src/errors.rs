@@ -66,6 +66,12 @@ impl From<gimli::Error> for Error {
     }
 }
 
+impl From<wat::Error> for Error {
+    fn from(value: wat::Error) -> Self {
+        Self::Wat(value)
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

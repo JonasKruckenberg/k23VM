@@ -5,7 +5,7 @@ macro_rules! foreach_builtin_function {
     ($mac:ident) => {
         $mac! {
             // Raises an unconditional trap.
-             trap(vmctx: vmctx, code: u8);
+            trap(vmctx: vmctx, code: u8);
         }
     };
 }

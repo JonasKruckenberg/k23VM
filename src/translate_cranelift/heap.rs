@@ -179,9 +179,8 @@ impl IRHeap {
         let make_compare = |builder: &mut FunctionBuilder,
                             compare_kind: IntCC,
                             lhs: Value,
-                            lhs_off: Option<i64>,
                             rhs: Value,
-                            rhs_off: Option<i64>| {
+                            | {
             let result = builder.ins().icmp(compare_kind, lhs, rhs);
             if pcc {
                 // Name the original value as a def of the SSA value;
@@ -199,7 +198,7 @@ impl IRHeap {
                 builder.func.dfg.facts[lhs] = Some(Fact::value_offset(
                     pointer_bit_width,
                     orig_index,
-                    lhs_off.unwrap(),
+                    0,
                 ));
                 // If the RHS is a symbolic value (v1 or gv1), we can
                 // emit a Compare fact.
@@ -209,8 +208,8 @@ impl IRHeap {
                 {
                     builder.func.dfg.facts[result] = Some(Fact::Compare {
                         kind: compare_kind,
-                        lhs: Expr::offset(&Expr::value(orig_index), lhs_off.unwrap()).unwrap(),
-                        rhs: Expr::offset(rhs, rhs_off.unwrap()).unwrap(),
+                        lhs: Expr::offset(&Expr::value(orig_index), 0).unwrap(),
+                        rhs: Expr::offset(rhs, 0).unwrap(),
                     });
                 }
                 // Likewise, if the RHS is a constant, we can emit a
@@ -221,8 +220,8 @@ impl IRHeap {
                 {
                     builder.func.dfg.facts[result] = Some(Fact::Compare {
                         kind: compare_kind,
-                        lhs: Expr::offset(&Expr::value(orig_index), lhs_off.unwrap()).unwrap(),
-                        rhs: Expr::constant((k as i64).checked_add(rhs_off.unwrap()).unwrap()),
+                        lhs: Expr::offset(&Expr::value(orig_index), 0).unwrap(),
+                        rhs: Expr::constant((k as i64).checked_add(0).unwrap()),
                     });
                 }
             }
@@ -299,7 +298,6 @@ impl IRHeap {
             //    Since we have to emit explicit bounds checks, we might as well be
             //    precise, not rely on the virtual memory subsystem at all, and not
             //    factor in the guard pages here.
-
             // NB: this subtraction cannot wrap because we didn't hit the first
             // special case.
             let adjusted_bound = self.bound - offset_and_size;
@@ -314,9 +312,7 @@ impl IRHeap {
                 builder,
                 IntCC::UnsignedGreaterThan,
                 index,
-                Some(0),
                 adjusted_bound_value,
-                Some(0),
             );
             Ok(Reachability::Reachable(
                 self.explicit_check_oob_condition_and_compute_addr(
@@ -356,13 +352,14 @@ impl IRHeap {
             env.trapnz(builder, oob_condition, TrapCode::HEAP_OUT_OF_BOUNDS);
         }
         let mut addr = self.compute_addr(&mut builder.cursor(), addr_ty, index, offset, pcc);
-
+        
         if spectre_mitigations_enabled {
+            assert!(!env.software_traps());
             let null = builder.ins().iconst(addr_ty, 0);
             addr = builder
                 .ins()
                 .select_spectre_guard(oob_condition, null, addr);
-
+            
             if let Some((ty, size)) = pcc {
                 builder.func.dfg.facts[null] =
                     Some(Fact::constant(u16::try_from(addr_ty.bits()).unwrap(), 0));

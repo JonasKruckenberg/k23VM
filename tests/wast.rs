@@ -401,7 +401,6 @@ impl WastContext {
             }
             WastDirective::AssertMalformed { module, .. } => {
                 if let Ok(_) = self.wat(module, path, wat) {
-                    tracing::error!("expected malformed module to fail to instantiate");
                 }
             }
             WastDirective::AssertInvalid {
@@ -452,10 +451,11 @@ impl WastContext {
                 let result = self.perform_invoke(call)?;
                 self.assert_trap(result, message)?;
             }
-            WastDirective::AssertException { .. } => todo!(),
             WastDirective::AssertSuspension { .. } => {}
             WastDirective::Thread(_) => {}
             WastDirective::Wait { .. } => {}
+            WastDirective::Thread(_) |
+            WastDirective::Wait { .. } => todo!("unsupported wast directive {directive:?}")
         }
 
         Ok(())
@@ -542,7 +542,6 @@ impl WastContext {
             WastExecute::Invoke(invoke) => self.perform_invoke(invoke),
             WastExecute::Wat(mut module) => Ok(match &mut module {
                 Wat::Module(m) => {
-                    // TODO ouff
                     let s: &'static [u8] = Box::leak(m.encode()?.into_boxed_slice());
                     self.instantiate_module(s)?.map(|_| Vec::new())
                 }

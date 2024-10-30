@@ -494,7 +494,6 @@ unsafe fn initialize_tables(
         };
 
         let offset = const_eval.eval(&segment.offset)?;
-        tracing::debug!("offset {offset:?}");
         let offset = usize::try_from(offset.get_u64()).unwrap();
 
         if let Some(def_index) = module.parsed().defined_table_index(segment.table_index) {
@@ -515,7 +514,6 @@ unsafe fn initialize_memories(
 ) -> crate::Result<()> {
     for init in module.parsed().memory_initializers.iter() {
         let offset = const_eval.eval(&init.offset)?;
-        tracing::debug!("offset {offset:?}");
         let offset = usize::try_from(offset.get_u64()).unwrap();
 
         if let Some(def_index) = module.parsed().defined_memory_index(init.memory_index) {

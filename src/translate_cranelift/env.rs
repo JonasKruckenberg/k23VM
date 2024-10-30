@@ -46,6 +46,9 @@ pub struct TranslationEnvironment<'module_env> {
     ///
     /// This is useful when signal/interrupt handling is not possible or desired.
     software_traps: bool,
+
+    /// Whether to use the heap access spectre mitigation.
+    heap_access_spectre_mitigation: bool,
 }
 
 impl<'module_env> TranslationEnvironment<'module_env> {
@@ -54,11 +57,12 @@ impl<'module_env> TranslationEnvironment<'module_env> {
         Self {
             isa,
             module,
+            builtin_functions,
             vmctx_plan: VMContextPlan::for_module(isa, module),
             vmctx: None,
             pcc_vmctx_memtype: None,
-            software_traps: true,
-            builtin_functions,
+            software_traps: false,
+            heap_access_spectre_mitigation: true
         }
     }
 
@@ -101,7 +105,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
         false
     }
     pub(crate) fn heap_access_spectre_mitigation(&self) -> bool {
-        true
+        self.heap_access_spectre_mitigation
     }
     pub(crate) fn proof_carrying_code(&self) -> bool {
         true
@@ -137,6 +141,9 @@ impl<'module_env> TranslationEnvironment<'module_env> {
     /// an internal implementation-detail parameter?
     pub fn is_wasm_return(&self, signature: &Signature, index: usize) -> bool {
         signature.returns[index].purpose == ir::ArgumentPurpose::Normal
+    }
+    pub fn software_traps(&self) -> bool {
+        self.software_traps
     }
 }
 
@@ -331,7 +338,6 @@ impl TranslationEnvironment<'_> {
             bound: mp.max_size_based_on_index_type(),
             index_type: self.memory_index_type(index),
             memory_type: ptr_memtype,
-            // bound: u64::MAX,
             offset_guard_size: mp.offset_guard_size,
             page_size_log2: mp.page_size_log2,
         };

@@ -10,6 +10,10 @@ use wasmparser::Validator;
 pub struct Module(Arc<ModuleInner>);
 
 impl Module {
+    pub fn from_wat(validator: &mut Validator, compiler: &Compiler, str: &str) -> crate::Result<Self> {
+        Self::from_bytes(validator, compiler, &wat::parse_str(str)?)
+    }
+
     pub fn from_bytes(
         validator: &mut Validator,
         compiler: &Compiler,

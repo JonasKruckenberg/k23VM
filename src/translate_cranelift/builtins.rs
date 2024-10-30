@@ -78,6 +78,12 @@ impl BuiltinFunctionSignatures {
     fn u8(&self) -> AbiParam {
         AbiParam::new(types::I8)
     }
+    fn i32(&self) -> AbiParam {
+        AbiParam::new(types::I32)
+    }
+    fn i64(&self) -> AbiParam {
+        AbiParam::new(types::I64)
+    }
 
     pub(crate) fn signature(&self, builtin: BuiltinFunctionIndex) -> Signature {
         let mut _cur = 0;
