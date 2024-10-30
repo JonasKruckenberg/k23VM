@@ -28,6 +28,7 @@ hashbrown = { version = "0.15", default-features = false, features = [
     "default-hasher",
     "serde"
 ] }
+wat = "1.219.1"
 wasmparser = { version = "0.219", default-features = false, features = ["features", "validate", "component-model"] }
 target-lexicon = { version = "0.12.14", default-features = false }
 cranelift-codegen = { version = "0.113.0", default-features = false, features = ["std", "host-arch"] }

@@ -442,6 +442,7 @@ dependencies = [
  "tracing",
  "wasmparser",
  "wast",
+ "wat",
 ]
 
 [[package]]
@@ -957,6 +958,15 @@ dependencies = [
  "memchr",
  "unicode-width",
  "wasm-encoder",
+]
+
+[[package]]
+name = "wat"
+version = "1.219.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bc3cf014fb336883a411cd662f987abf6a1d2a27f2f0008616a0070bbf6bd0d"
+dependencies = [
+ "wast",
 ]
 
 [[package]]
