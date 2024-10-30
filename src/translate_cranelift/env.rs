@@ -429,6 +429,15 @@ impl TranslationEnvironment<'_> {
             builder.ins().trapnz(value, code);
         }
     }
+    pub fn uadd_overflow_trap(&mut self, builder: &mut FunctionBuilder, arg1: Value, arg2: Value, code: TrapCode) -> Value {
+        if self.software_traps {
+            let (result, overflow) = builder.ins().uadd_overflow(arg1, arg2);
+            self.trapnz(builder, overflow, code);
+            result
+        } else {
+            builder.ins().uadd_overflow_trap(arg1, arg2, code)
+        }
+    }
 
     /// Helper to conditionally trap on `cond`.
     fn conditionally_trap(&mut self, builder: &mut FunctionBuilder, cond: Value, code: TrapCode) {

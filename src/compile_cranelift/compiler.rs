@@ -219,19 +219,24 @@ impl Compiler {
             (params[0], params[1], params[2], params[3])
         };
 
+        // TODO remove this
+        let temp_mod = ParsedModule::default();
+        let mut env = TranslationEnvironment::new(self.target_isa(), &temp_mod);
+
         // First load the actual arguments out of the array.
         let mut args = load_values_from_array(
             func_ty.params(),
             &mut builder,
             values_vec_ptr,
             values_vec_len,
+            &mut env,
         );
         args.insert(0, caller_vmctx);
         args.insert(0, vmctx);
 
         // Assert that we were really given a core Wasm vmctx, since that's
         // what we are assuming with our offsets below.
-        debug_assert_vmctx_kind(self.target_isa(), &mut builder, vmctx, VMCONTEXT_MAGIC);
+        debug_assert_vmctx_kind(self.target_isa(), &mut builder, vmctx, VMCONTEXT_MAGIC, &mut env);
         // Then store our current stack pointer into the appropriate slot.
         let fp = builder.ins().get_frame_pointer(pointer_type);
         builder.ins().store(
@@ -244,13 +249,14 @@ impl Compiler {
         // Then call the Wasm function with those arguments.
         let call = declare_and_call(&mut builder, wasm_call_sig, func_index.as_u32(), &args);
         let results = builder.func.dfg.inst_results(call).to_vec();
-
+        
         store_values_to_array(
             &mut builder,
             func_ty.results(),
             &results,
             values_vec_ptr,
             values_vec_len,
+            &mut env,
         );
 
         builder.ins().return_(&[]);
@@ -270,12 +276,16 @@ impl Compiler {
         let mut compiler = self.function_compiler();
         let func = ir::Function::with_name_signature(Default::default(), builtin_call_sig.clone());
         let (mut builder, block0) = compiler.builder(func);
+        
+        // TODO remove this
+        let temp_mod = ParsedModule::default();
+        let mut env = TranslationEnvironment::new(isa, &temp_mod);
 
         // Debug-assert that this is the right kind of vmctx, and then
         // additionally perform the "routine of the exit trampoline" of saving
         // fp/pc/etc.
         let vmctx = builder.block_params(block0)[0];
-        debug_assert_vmctx_kind(isa, &mut builder, vmctx, VMCONTEXT_MAGIC);
+        debug_assert_vmctx_kind(isa, &mut builder, vmctx, VMCONTEXT_MAGIC, &mut env);
         save_last_wasm_exit_fp_and_pc(&mut builder, pointer_type, &self.vmctx_plan, vmctx);
 
         // Now it's time to delegate to the actual builtin. Builtins are stored
@@ -460,10 +470,11 @@ fn load_values_from_array(
     builder: &mut FunctionBuilder,
     values_vec_ptr: Value,
     values_vec_capacity: Value,
+    env: &mut TranslationEnvironment
 ) -> Vec<Value> {
     let value_size = size_of::<u128>();
 
-    debug_assert_enough_capacity_for_length(builder, types.len(), values_vec_capacity);
+    debug_assert_enough_capacity_for_length(builder, types.len(), values_vec_capacity, env);
 
     // Note that this is little-endian like `store_values_to_array` above,
     // see notes there for more information.
@@ -497,9 +508,10 @@ fn store_values_to_array(
     values: &[Value],
     values_vec_ptr: Value,
     values_vec_capacity: Value,
+    env: &mut TranslationEnvironment
 ) {
     debug_assert_eq!(types.len(), values.len());
-    debug_assert_enough_capacity_for_length(builder, types.len(), values_vec_capacity);
+    debug_assert_enough_capacity_for_length(builder, types.len(), values_vec_capacity, env);
 
     // Note that loads and stores are unconditionally done in the
     // little-endian format rather than the host's native-endianness,
@@ -525,6 +537,7 @@ fn debug_assert_enough_capacity_for_length(
     builder: &mut FunctionBuilder,
     length: usize,
     capacity: Value,
+    env: &mut TranslationEnvironment
 ) {
     if cfg!(debug_assertions) {
         let enough_capacity = builder.ins().icmp_imm(
@@ -532,7 +545,7 @@ fn debug_assert_enough_capacity_for_length(
             capacity,
             ir::immediates::Imm64::new(length.try_into().unwrap()),
         );
-        builder.ins().trapz(enough_capacity, TRAP_INTERNAL_ASSERT);
+        env.trapz(builder, enough_capacity, TRAP_INTERNAL_ASSERT);
     }
 }
 
@@ -541,6 +554,7 @@ fn debug_assert_vmctx_kind(
     builder: &mut FunctionBuilder,
     vmctx: Value,
     expected_vmctx_magic: u32,
+    env: &mut TranslationEnvironment
 ) {
     if cfg!(debug_assertions) {
         let magic = builder.ins().load(
@@ -554,6 +568,6 @@ fn debug_assert_vmctx_kind(
             magic,
             i64::from(expected_vmctx_magic),
         );
-        builder.ins().trapz(is_expected_vmctx, TRAP_INTERNAL_ASSERT);
+        env.trapz(builder, is_expected_vmctx, TRAP_INTERNAL_ASSERT);
     }
 }

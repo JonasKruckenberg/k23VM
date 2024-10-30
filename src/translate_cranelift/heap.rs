@@ -71,10 +71,7 @@ impl IRHeap {
             // directly into `heap_addr`.
             Err(_) => {
                 let offset = builder.ins().iconst(self.index_type, memarg.offset as i64);
-                let adjusted_index =
-                    builder
-                        .ins()
-                        .uadd_overflow_trap(index, offset, TrapCode::HEAP_OUT_OF_BOUNDS);
+                let adjusted_index = env.uadd_overflow_trap(builder, index, offset, TrapCode::HEAP_OUT_OF_BOUNDS);
                 self.bounds_check_and_compute_addr(builder, adjusted_index, 0, access_size, env)?
             }
         };
@@ -139,7 +136,7 @@ impl IRHeap {
                 .ins()
                 .band_imm(effective_addr, i64::from(loaded_bytes - 1));
             let f = builder.ins().icmp_imm(IntCC::NotEqual, misalignment, 0);
-            builder.ins().trapnz(f, TRAP_HEAP_MISALIGNED);
+            env.trapnz(builder, f, TRAP_HEAP_MISALIGNED);
         }
 
         self.prepare_addr(builder, index, loaded_bytes, memarg, env)
@@ -236,7 +233,7 @@ impl IRHeap {
             // 1. First special case: trap immediately if `offset + access_size >
             //    bound`, since we will end up being out-of-bounds regardless of the
             //    given `index`.
-            builder.ins().trap(TrapCode::HEAP_OUT_OF_BOUNDS);
+            env.trap(builder, TrapCode::HEAP_OUT_OF_BOUNDS);
             Ok(Reachability::Unreachable)
         } else if self.index_type == ir::types::I32
             && u64::from(u32::MAX) <= self.bound + self.offset_guard_size - offset_and_size
