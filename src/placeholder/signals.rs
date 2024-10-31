@@ -4,6 +4,7 @@ use std::{io, mem, ptr};
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::sync::Once;
+use crate::placeholder::code_registry;
 
 static mut PREV_SIGSEGV: MaybeUninit<libc::sigaction> = MaybeUninit::uninit();
 static mut PREV_SIGBUS: MaybeUninit<libc::sigaction> = MaybeUninit::uninit();
@@ -102,7 +103,7 @@ unsafe extern "C" fn trap_handler(
         let fp = (*cx.uc_mcontext).__ss.__fp as usize;
         
         // If this fault wasn't in wasm code, then it's not our problem
-        let Some((code, text_offset)) = super::lookup_code(pc) else {
+        let Some((code, text_offset)) = code_registry::lookup_code(pc) else {
             return false;
         };
 
