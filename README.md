@@ -107,6 +107,7 @@ applications increasingly move to the web, the operating system is reduced to th
 
 [^2]: ChromeOS takes this to its logical conclusion and in a weird roundabout way, is doing the same thing as I am
    proposing, but approached from the opposite side. 
+
    It also perfectly highlights how the web platform is reaching its limits and why that approach is not the future.
 
 ## Can you take a look at my OS I think its broken
