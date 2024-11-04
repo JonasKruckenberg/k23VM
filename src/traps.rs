@@ -1,8 +1,6 @@
-use crate::indices::FuncIndex;
-use crate::{FilePos, Module};
 use core::fmt;
 use cranelift_codegen::ir::TrapCode;
-use object::{Bytes, LittleEndian, U32};
+use object::LittleEndian;
 
 const TRAP_OFFSET: u8 = 1;
 pub const TRAP_INTERNAL_ASSERT: TrapCode =
@@ -22,49 +20,59 @@ pub const TRAP_NULL_REFERENCE: TrapCode =
 pub const TRAP_I31_NULL_REFERENCE: TrapCode =
     TrapCode::unwrap_user(Trap::NullI31Ref as u8 + TRAP_OFFSET);
 
-#[derive(onlyerror::Error, Debug)]
+#[derive(Debug)]
 pub enum Trap {
     /// Internal assertion failed
-    #[error("internal assertion failed")]
     InternalAssertionFailed,
     /// A wasm atomic operation was presented with a not-naturally-aligned linear-memory address.
-    #[error("unaligned atomic operation")]
     HeapMisaligned,
     /// Out-of-bounds access to a table.
-    #[error("out of bounds table access")]
     TableOutOfBounds,
     /// Indirect call to a null table entry.
-    #[error("accessed uninitialized table element")]
     IndirectCallToNull,
     /// Signature mismatch on indirect call.
-    #[error("indirect call signature mismatch")]
     BadSignature,
     /// Code that was supposed to have been unreachable was reached.
-    #[error("unreachable code executed")]
     UnreachableCodeReached,
     /// Call to a null reference.
-    #[error("null reference called")]
     NullReference,
     /// Attempt to get the bits of a null `i31ref`.
-    #[error("null i32 reference called")]
     NullI31Ref,
 
     /// The current stack space was exhausted.
-    #[error("call stack exhausted")]
     StackOverflow,
     /// An out-of-bounds memory access.
-    #[error("out of bounds memory access")]
     MemoryOutOfBounds,
     /// An integer arithmetic operation caused an overflow.
-    #[error("integer overflow")]
     IntegerOverflow,
     /// An integer division by zero.
-    #[error("integer division by zero")]
     IntegerDivisionByZero,
     /// Failed float-to-int conversion.
-    #[error("invalid conversion to integer")]
     BadConversionToInteger,
 }
+
+impl fmt::Display for Trap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Trap::InternalAssertionFailed => f.write_str("internal assertion failed"),
+            Trap::HeapMisaligned => f.write_str("unaligned atomic operation"),
+            Trap::TableOutOfBounds => f.write_str("out of bounds table access"),
+            Trap::IndirectCallToNull => f.write_str("accessed uninitialized table element"),
+            Trap::BadSignature => f.write_str("indirect call signature mismatch"),
+            Trap::UnreachableCodeReached => f.write_str("unreachable code executed"),
+            Trap::NullReference => f.write_str("null reference called"),
+            Trap::NullI31Ref => f.write_str("null i32 reference called"),
+
+            Trap::StackOverflow => f.write_str("call stack exhausted"),
+            Trap::MemoryOutOfBounds => f.write_str("out of bounds memory access"),
+            Trap::IntegerOverflow => f.write_str("integer overflow"),
+            Trap::IntegerDivisionByZero => f.write_str("integer division by zero"),
+            Trap::BadConversionToInteger => f.write_str("invalid conversion to integer"),
+        }
+    }
+}
+
+impl core::error::Error for Trap {}
 
 impl Trap {
     pub(crate) fn from_trap_code(code: TrapCode) -> Option<Self> {
@@ -138,232 +146,11 @@ impl TryFrom<u8> for Trap {
 
 #[allow(unused)]
 pub fn trap_for_offset(trap_section: &[u8], offset: u32) -> Option<Trap> {
-    let mut section = Bytes(trap_section);
-
-    let count = section.read::<U32<LittleEndian>>().unwrap();
-    let offsets = section
-        .read_slice::<U32<LittleEndian>>(count.get(LittleEndian) as usize)
-        .unwrap();
-    let traps = section.read_slice::<u8>(offsets.len()).unwrap();
+    let (offsets, traps) = crate::compile::parse_trap_section(trap_section).ok()?;
 
     let index = offsets
         .binary_search_by_key(&offset, |val| val.get(LittleEndian))
         .ok()?;
 
     Trap::try_from(traps[index]).ok()
-}
-
-#[derive(Debug)]
-pub struct WasmBacktrace {
-    wasm_trace: Vec<FrameInfo>,
-}
-
-impl WasmBacktrace {
-    pub(crate) fn from_captured(
-        module: &Module,
-        runtime_trace: crate::vm::Backtrace,
-        trap_pc: Option<usize>,
-    ) -> Self {
-        let mut wasm_trace = Vec::<FrameInfo>::with_capacity(runtime_trace.frames().len());
-
-        for frame in runtime_trace.frames() {
-            debug_assert!(frame.pc != 0);
-
-            let pc_to_lookup = if Some(frame.pc) == trap_pc {
-                frame.pc
-            } else {
-                frame.pc - 1
-            };
-
-            let text_offset = pc_to_lookup.checked_sub(module.code().text().as_ptr() as usize).unwrap();
-            let text_offset = usize::try_from(text_offset).unwrap();
-
-            if let Some(info) = FrameInfo::new(module.clone(), text_offset) {
-                wasm_trace.push(info);
-            }
-        }
-
-        Self { wasm_trace }
-    }
-}
-
-impl fmt::Display for WasmBacktrace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, frame) in self.wasm_trace.iter().enumerate() {
-            let name = frame.module.name().unwrap_or("<unknown>");
-            write!(f, "  {i:>3}: ")?;
-
-            if frame.symbols().is_empty() {
-                write!(f, "{name}::")?;
-
-                demangle_function_name_or_index(f, frame.func_name(), frame.func_index())?;
-            } else {
-                for (i, symbol) in frame.symbols().iter().enumerate() {
-                    if i > 0 {
-                        write!(f, "              - ")?;
-                    } else {
-                        // ...
-                    }
-                    match symbol.name() {
-                        Some(name) => demangle_function_name(f, name)?,
-                        None if i == 0 => demangle_function_name_or_index(
-                            f,
-                            frame.func_name(),
-                            frame.func_index(),
-                        )?,
-                        None => write!(f, "<inlined function>")?,
-                    }
-                    if let Some(file) = symbol.file() {
-                        writeln!(f, "")?;
-                        write!(f, "                    at {file}")?;
-                        if let Some(line) = symbol.line() {
-                            write!(f, ":{line}")?;
-                            if let Some(col) = symbol.column() {
-                                write!(f, ":{col}")?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-fn demangle_function_name_or_index(
-    f: &mut fmt::Formatter,
-    maybe_name: Option<&str>,
-    index: FuncIndex,
-) -> fmt::Result {
-    match maybe_name {
-        Some(name) => demangle_function_name(f, name),
-        None => write!(f, "<wasm function {}>", index.as_u32()),
-    }
-}
-
-// TODO if we can pipe the information from the WASM producers section into
-// this we can have a better informed demangling
-fn demangle_function_name(f: &mut fmt::Formatter, raw: &str) -> fmt::Result {
-    if let Ok(demangled) = rustc_demangle::try_demangle(raw) {
-        write!(f, "{demangled}")
-    } else {
-        write!(f, "{raw}")
-    }
-}
-
-#[derive(Debug)]
-pub struct FrameInfo {
-    module: Module,
-    func_index: FuncIndex,
-    func_name: Option<String>,
-    func_start: FilePos,
-    instr: Option<FilePos>,
-    symbols: Vec<FrameSymbol>,
-}
-
-impl FrameInfo {
-    fn new(module: Module, text_offset: usize) -> Option<Self> {
-        let (index, _) = module.compiled().text_offset_to_func(text_offset)?;
-
-        let info = module.compiled().wasm_func_info(index);
-        let func_index = module.parsed().func_index(index);
-        let func_name = module.func_name(func_index).map(|s| s.to_string());
-        let func_start = info.start_srcloc;
-        let instr = None;
-
-        let mut symbols = Vec::new();
-
-        let _ = &mut symbols;
-        if let Some(s) = module.symbolize_context().ok().flatten() {
-            // if let Some(offset) = instr.and_then(|i| i.file_offset()) {
-            //     let to_lookup = u64::from(offset) - s.code_section_offset();
-            //     if let Ok(mut frames) = s.addr2line().find_frames(to_lookup).skip_all_loads() {
-            //         while let Ok(Some(frame)) = frames.next() {
-            //             symbols.push(FrameSymbol {
-            //                 name: frame
-            //                     .function
-            //                     .as_ref()
-            //                     .and_then(|l| l.raw_name().ok())
-            //                     .map(|s| s.to_string()),
-            //                 file: frame
-            //                     .location
-            //                     .as_ref()
-            //                     .and_then(|l| l.file)
-            //                     .map(|s| s.to_string()),
-            //                 line: frame.location.as_ref().and_then(|l| l.line),
-            //                 column: frame.location.as_ref().and_then(|l| l.column),
-            //             });
-            //         }
-            //     }
-            // }
-        }
-
-        Some(Self {
-            module,
-            func_index,
-            func_name,
-            func_start,
-            instr,
-            symbols,
-        })
-    }
-
-    pub fn func_index(&self) -> FuncIndex {
-        self.func_index
-    }
-    pub fn module(&self) -> &Module {
-        &self.module
-    }
-    pub fn func_name(&self) -> Option<&str> {
-        self.func_name.as_deref()
-    }
-    pub fn symbols(&self) -> &[FrameSymbol] {
-        &self.symbols
-    }
-}
-
-#[derive(Debug)]
-pub struct FrameSymbol {
-    name: Option<String>,
-    file: Option<String>,
-    line: Option<u32>,
-    column: Option<u32>,
-}
-
-impl FrameSymbol {
-    /// Returns the function name associated with this symbol.
-    ///
-    /// Note that this may not be present with malformed debug information, or
-    /// the debug information may not include it. Also note that the symbol is
-    /// frequently mangled, so you might need to run some form of demangling
-    /// over it.
-    pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-
-    /// Returns the source code filename this symbol was defined in.
-    ///
-    /// Note that this may not be present with malformed debug information, or
-    /// the debug information may not include it.
-    pub fn file(&self) -> Option<&str> {
-        self.file.as_deref()
-    }
-
-    /// Returns the 1-indexed source code line number this symbol was defined
-    /// on.
-    ///
-    /// Note that this may not be present with malformed debug information, or
-    /// the debug information may not include it.
-    pub fn line(&self) -> Option<u32> {
-        self.line
-    }
-
-    /// Returns the 1-indexed source code column number this symbol was defined
-    /// on.
-    ///
-    /// Note that this may not be present with malformed debug information, or
-    /// the debug information may not include it.
-    pub fn column(&self) -> Option<u32> {
-        self.column
-    }
 }

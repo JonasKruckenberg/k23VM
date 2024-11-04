@@ -1,5 +1,5 @@
-use crate::parse::{ConstExpr, ConstOp};
-use crate::vm::VMVal;
+use crate::runtime::VMVal;
+use crate::translate::{ConstExpr, ConstOp};
 use smallvec::SmallVec;
 
 #[derive(Debug, Default)]
@@ -15,7 +15,7 @@ impl ConstExprEvaluator {
                 ConstOp::I64Const(value) => self.push(VMVal::i64(value)),
                 ConstOp::F32Const(value) => self.push(VMVal::f32(value)),
                 ConstOp::F64Const(value) => self.push(VMVal::f64(value)),
-                ConstOp::V128Const(value) => self.push(VMVal::v128(value)),
+                ConstOp::V128Const(value) => self.push(VMVal::v128(u128::from_le_bytes(value))),
                 ConstOp::GlobalGet(_) => todo!(),
                 ConstOp::RefI31 => todo!(),
                 ConstOp::RefNull => todo!(),

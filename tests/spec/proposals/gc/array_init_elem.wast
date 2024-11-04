@@ -74,14 +74,14 @@
   )
 )
 
-;; null array argument trap_handling
+;; null array argument traps
 (assert_trap (invoke "array_init_elem-null") "null array reference")
 
-;; OOB initial index trap_handling
+;; OOB initial index traps
 (assert_trap (invoke "array_init_elem" (i32.const 13) (i32.const 0) (i32.const 0)) "out of bounds array access")
 (assert_trap (invoke "array_init_elem" (i32.const 0) (i32.const 13) (i32.const 0)) "out of bounds table access")
 
-;; OOB length trap_handling
+;; OOB length traps
 (assert_trap (invoke "array_init_elem" (i32.const 0) (i32.const 0) (i32.const 13)) "out of bounds array access")
 (assert_trap (invoke "array_init_elem" (i32.const 0) (i32.const 0) (i32.const 13)) "out of bounds array access")
 
@@ -102,7 +102,7 @@
 (assert_return (invoke "array_call_nth" (i32.const 3)))
 (assert_trap (invoke "array_call_nth" (i32.const 4)) "uninitialized element")
 
-;; init_data/elem with dropped segments trap_handling for non-zero length
+;; init_data/elem with dropped segments traps for non-zero length
 (assert_return (invoke "drop_segs"))
 (assert_return (invoke "array_init_elem" (i32.const 0) (i32.const 0) (i32.const 0)))
 (assert_trap (invoke "array_init_elem" (i32.const 0) (i32.const 0) (i32.const 1)) "out of bounds table access")

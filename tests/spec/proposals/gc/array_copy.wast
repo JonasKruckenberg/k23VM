@@ -93,15 +93,15 @@
   )
 )
 
-;; null array argument trap_handling
+;; null array argument traps
 (assert_trap (invoke "array_copy-null-left") "null array reference")
 (assert_trap (invoke "array_copy-null-right") "null array reference")
 
-;; OOB initial index trap_handling
+;; OOB initial index traps
 (assert_trap (invoke "array_copy" (i32.const 13) (i32.const 0) (i32.const 0)) "out of bounds array access")
 (assert_trap (invoke "array_copy" (i32.const 0) (i32.const 13) (i32.const 0)) "out of bounds array access")
 
-;; OOB length trap_handling
+;; OOB length traps
 (assert_trap (invoke "array_copy" (i32.const 0) (i32.const 0) (i32.const 13)) "out of bounds array access")
 (assert_trap (invoke "array_copy" (i32.const 0) (i32.const 0) (i32.const 13)) "out of bounds array access")
 

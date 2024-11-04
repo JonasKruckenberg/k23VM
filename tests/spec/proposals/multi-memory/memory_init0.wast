@@ -34,7 +34,7 @@
 (invoke "init" (i32.const 0x10000) (i32.const 0) (i32.const 0))
 (invoke "init" (i32.const 0) (i32.const 4) (i32.const 0))
 
-;; Writing 0 bytes outside the memory trap_handling.
+;; Writing 0 bytes outside the memory traps.
 (assert_trap (invoke "init" (i32.const 0x10001) (i32.const 0) (i32.const 0))
     "out of bounds memory access")
 (assert_trap (invoke "init" (i32.const 0) (i32.const 5) (i32.const 0))

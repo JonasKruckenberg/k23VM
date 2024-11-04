@@ -849,7 +849,7 @@
 (assert_return (invoke "i64_align_switch" (i32.const 6) (i32.const 4)) (i64.const 10))
 (assert_return (invoke "i64_align_switch" (i32.const 6) (i32.const 8)) (i64.const 10))
 
-;; Test that an i64 store with 4-byte alignment that's 4 bytes out of bounds trap_handling without storing anything
+;; Test that an i64 store with 4-byte alignment that's 4 bytes out of bounds traps without storing anything
 
 (module
   (memory 1)

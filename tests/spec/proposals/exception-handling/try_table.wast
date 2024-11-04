@@ -9,6 +9,7 @@
 
 (module
   (tag $imported-e0 (import "test" "e0"))
+  (tag $imported-e0-alias (import "test" "e0"))
   (func $imported-throw (import "test" "throw"))
   (tag $e0)
   (tag $e1)
@@ -211,6 +212,16 @@
     (i32.const 2)
   )
 
+  (func (export "catch-imported-alias") (result i32)
+    (block $h
+      (try_table (result i32) (catch $imported-e0 $h)
+        (throw $imported-e0-alias (i32.const 1))
+      )
+      (return)
+    )
+    (i32.const 2)
+  )
+
   (func (export "catchless-try") (param i32) (result i32)
     (block $h
       (try_table (result i32) (catch $e0 $h)
@@ -237,6 +248,10 @@
         (return_call_indirect (i32.const 0))
       )
     )
+  )
+
+  (func (export "try-with-param")
+    (i32.const 0) (try_table (param i32) (drop))
   )
 )
 
@@ -287,12 +302,15 @@
 (assert_return (invoke "catch-param-i32" (i32.const 5)) (i32.const 5))
 
 (assert_return (invoke "catch-imported") (i32.const 2))
+(assert_return (invoke "catch-imported-alias") (i32.const 2))
 
 (assert_return (invoke "catchless-try" (i32.const 0)) (i32.const 0))
 (assert_return (invoke "catchless-try" (i32.const 1)) (i32.const 1))
 
 (assert_exception (invoke "return-call-in-try-catch"))
 (assert_exception (invoke "return-call-indirect-in-try-catch"))
+
+(assert_return (invoke "try-with-param"))
 
 (module
   (func $imported-throw (import "test" "throw"))

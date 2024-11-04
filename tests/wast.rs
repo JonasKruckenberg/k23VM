@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context};
 use cranelift_codegen::settings::Configurable;
 use k23_vm::{
-    Compiler, ConstExprEvaluator, Extern, Instance, InstanceAllocator, Linker, Module,
+    CraneliftCompiler, ConstExprEvaluator, Extern, Instance, InstanceAllocator, Linker, Module,
     PlaceholderAllocatorDontUse, Store, Val,
 };
 use std::fmt::{Display, LowerHex};
@@ -37,8 +37,8 @@ spectests!(
     br_if "./spec/br_if.wast",
     br_table "./spec/br_table.wast",
     bulk "./spec/bulk.wast",
-    /*call "./spec/call.wast",*/ // TODO fix infinite loop in this test
-    /*call_indirect "./spec/call_indirect.wast",*/ // TODO fix infinite loop in this test
+    call "./spec/call.wast",
+    call_indirect "./spec/call_indirect.wast",
     comments "./spec/comments.wast",
     const_ "./spec/const.wast",
     conversions "./spec/conversions.wast",
@@ -79,12 +79,12 @@ spectests!(
     loop_ "./spec/loop.wast",
     memory "./spec/memory.wast",
     memory_copy "./spec/memory_copy.wast",
-    /*memory_fill "./spec/memory_fill.wast",*/ // TODO fix infinite loop in this test
+    memory_fill "./spec/memory_fill.wast",
     memory_grow "./spec/memory_grow.wast",
     memory_init "./spec/memory_init.wast",
     memory_redundancy "./spec/memory_redundancy.wast",
     memory_size "./spec/memory_size.wast",
-    /*memory_trap "./spec/memory_trap.wast",*/ // TODO this takes foreeeeever (40ish secs) figure out why
+    memory_trap "./spec/memory_trap.wast",
     names "./spec/names.wast",
     nop "./spec/nop.wast",
     obsolete_keywords "./spec/obsolete-keywords.wast",
@@ -93,7 +93,6 @@ spectests!(
     ref_null "./spec/ref_null.wast",
     return_ "./spec/return.wast",
     select "./spec/select.wast",
-    /*
     simd_address "./spec/simd_address.wast",
     simd_align "./spec/simd_align.wast",
     simd_bit_shift "./spec/simd_bit_shift.wast",
@@ -150,7 +149,7 @@ spectests!(
     simd_store8_lane "./spec/simd_store8_lane.wast",
     simd_store16_lane "./spec/simd_store16_lane.wast",
     simd_store32_lane "./spec/simd_store32_lane.wast",
-    simd_store64_lane "./spec/simd_store64_lane.wast", */
+    simd_store64_lane "./spec/simd_store64_lane.wast",
     skip_stack_guard_page "./spec/skip-stack-guard-page.wast",
     stack "./spec/stack.wast",
     start "./spec/start.wast",
@@ -205,7 +204,7 @@ pub struct WastContext {
     alloc: &'static dyn InstanceAllocator,
     const_eval: ConstExprEvaluator,
     validator: wasmparser::Validator,
-    compiler: Compiler,
+    compiler: CraneliftCompiler,
     current: Option<Instance>,
 }
 
@@ -226,7 +225,7 @@ impl WastContext {
             alloc: &PlaceholderAllocatorDontUse,
             const_eval: ConstExprEvaluator::default(),
             validator: wasmparser::Validator::default(),
-            compiler: Compiler::new(target_isa),
+            compiler: CraneliftCompiler::new(target_isa),
             current: None,
         };
         // ctx.linker
@@ -454,12 +453,12 @@ impl WastContext {
                 let result = self.perform_invoke(call)?;
                 self.assert_trap(result, message)?;
             }
-            WastDirective::ModuleDefinition(_) |
-            WastDirective::ModuleInstance { .. } |
-            WastDirective::AssertException { .. } |
-            WastDirective::AssertSuspension { .. } |
-            WastDirective::Thread(_) |
-            WastDirective::Wait { .. } => todo!("unsupported wast directive {directive:?}")
+            WastDirective::ModuleDefinition(_)
+            | WastDirective::ModuleInstance { .. }
+            | WastDirective::AssertException { .. }
+            | WastDirective::AssertSuspension { .. }
+            | WastDirective::Thread(_)
+            | WastDirective::Wait { .. } => todo!("unsupported wast directive {directive:?}"),
         }
 
         Ok(())
@@ -545,9 +544,7 @@ impl WastContext {
         match exec {
             WastExecute::Invoke(invoke) => self.perform_invoke(invoke),
             WastExecute::Wat(mut module) => Ok(match &mut module {
-                Wat::Module(m) => {
-                    self.instantiate_module(&m.encode()?)?.map(|_| Vec::new())
-                }
+                Wat::Module(m) => self.instantiate_module(&m.encode()?)?.map(|_| Vec::new()),
                 _ => unimplemented!(),
             }),
             WastExecute::Get { module, global, .. } => {

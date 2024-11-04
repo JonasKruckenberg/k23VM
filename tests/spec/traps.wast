@@ -1,4 +1,4 @@
-;; Test that trap_handling are preserved even in instructions which might otherwise
+;; Test that traps are preserved even in instructions which might otherwise
 ;; be dead-code-eliminated. These functions all perform an operation and
 ;; discard its return value.
 

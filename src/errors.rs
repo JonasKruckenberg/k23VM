@@ -1,37 +1,64 @@
-use crate::traps::{Trap, WasmBacktrace};
+use crate::Trap;
+use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
 use cranelift_codegen::CodegenError;
 
+/// Convenience macro for creating an `Error::Unsupported` variant.
+#[macro_export]
+macro_rules! wasm_unsupported {
+    ($($arg:tt)*) => { $crate::Error::Unsupported(alloc::format!($($arg)*)) }
+}
+
 #[derive(Debug)]
 pub enum Error {
     /// The input WebAssembly code is invalid.
-    ///
-    /// This error code is used by a WebAssembly translator when it encounters invalid WebAssembly
-    /// code. This should never happen for validated WebAssembly code.
     InvalidWebAssembly {
         /// A string describing the validation error.
         message: String,
         /// The bytecode offset where the error occurred.
         offset: usize,
     },
+    /// The WebAssembly code used an unsupported feature.
+    Unsupported(String),
+    /// Failed to compile a function.
+    Cranelift { func_name: String, message: String },
     /// Failed to parse DWARF debug information.
     Gimli(gimli::Error),
     /// Failed to parse a wat file.
     Wat(wat::Error),
-    /// Failed to compile a function.
-    Cranelift {
-        func_name: String,
-        message: String,
-    },
-    /// The WebAssembly code used an unsupported feature.
-    Unsupported(String),
+    /// Failed to write an object file.
+    ObjectWrite(String),
+    /// Failed to read an object file.
+    ObjectRead,
     /// A WebAssembly trap ocurred.
-    Trap {
-        backtrace: Option<WasmBacktrace>,
-        trap: Trap,
-        message: String,
-    },
+    Trap { trap: Trap, message: String },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::InvalidWebAssembly { message, offset } => {
+                f.write_fmt(format_args!("invalid WASM input at {offset}: {message}"))
+            }
+            Error::Unsupported(feature) => f.write_fmt(format_args!(
+                "Feature used by the WebAssembly code is not supported: {feature}"
+            )),
+            Error::Cranelift { func_name, message } => f.write_fmt(format_args!(
+                "failed to compile function {func_name}: {message}"
+            )),
+            Error::Gimli(e) => {
+                f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
+            }
+            Error::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
+            Error::ObjectWrite(e) => f.write_fmt(format_args!("Failed to write object file: {e}")),
+            Error::ObjectRead => f.write_str("Failed to read object file"),
+            Error::Trap { trap, message, .. } => {
+                f.write_fmt(format_args!("{message}. Reason {trap}"))?;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl From<wasmparser::BinaryReaderError> for Error {
@@ -72,43 +99,13 @@ impl From<wat::Error> for Error {
     }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::InvalidWebAssembly { message, offset } => {
-                f.write_fmt(format_args!("invalid WASM input at {offset}: {message}"))
-            }
-            Error::Gimli(e) => {
-                f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
-            }
-            Error::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
-            Error::Cranelift { func_name, message } => f.write_fmt(format_args!(
-                "failed to compile function {func_name}: {message}"
-            )),
-            Error::Unsupported(feature) => f.write_fmt(format_args!(
-                "Feature used by the WebAssembly code is not supported: {feature}"
-            )),
-            Error::Trap {
-                backtrace,
-                trap,
-                message,
-            } => {
-                f.write_fmt(format_args!("{message}. Reason {trap}"))?;
-                if let Some(backtrace) = backtrace {
-                    f.write_fmt(format_args!("\n{backtrace}"))?;
-                }
-                Ok(())
-            }
-        }
+impl From<object::write::Error> for Error {
+    fn from(value: object::write::Error) -> Self {
+        Self::ObjectWrite(value.to_string())
     }
 }
 
 impl core::error::Error for Error {}
-
-#[macro_export]
-macro_rules! wasm_unsupported {
-    ($($arg:tt)*) => { $crate::Error::Unsupported(alloc::format!($($arg)*)) }
-}
 
 #[derive(Copy, Clone, Debug)]
 pub struct SizeOverflow;

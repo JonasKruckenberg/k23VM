@@ -1,13 +1,19 @@
+use crate::translate::{WasmFuncType, WasmHeapTopTypeInner, WasmHeapType, WasmValType};
+use core::alloc::Allocator;
+use core::hash::{BuildHasher, Hash};
 use cranelift_codegen::ir;
-use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature, Type};
+use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
-use wasmparser::{FuncType, ValType};
 
 #[macro_export]
 macro_rules! enum_accessors {
-    ($bind:ident $(($variant:ident($ty:ty) $get:ident $unwrap:ident $cvt:expr))*) => ($(
-        /// Attempt to access the underlying value of this `Val`, returning
-        /// `None` if it is not the correct type.
+    ($bind:ident $(($variant:ident($ty:ty) $is:ident $get:ident $unwrap:ident $cvt:expr))*) => ($(
+        ///  Returns true when the enum is the correct variant.
+        pub fn $is(&self) -> bool {
+            matches!(self, Self::$variant(_))
+        }
+
+        ///  Returns the variant's value, returning None if it is not the correct type.
         #[inline]
         pub fn $get(&self) -> Option<$ty> {
             if let Self::$variant($bind) = self {
@@ -17,8 +23,7 @@ macro_rules! enum_accessors {
             }
         }
 
-        /// Returns the underlying value of this `Val`, panicking if it's the
-        /// wrong type.
+        /// Returns the variant's value, panicking if it is not the correct type.
         ///
         /// # Panics
         ///
@@ -46,15 +51,24 @@ macro_rules! owned_enum_accessors {
     )*)
 }
 
-pub fn value_type(ty: ValType) -> Type {
+pub fn value_type(ty: &WasmValType, pointer_type: ir::Type) -> ir::Type {
     match ty {
-        ValType::I32 => ir::types::I32,
-        ValType::I64 => ir::types::I64,
-        ValType::F32 => ir::types::F32,
-        ValType::F64 => ir::types::F64,
-        ValType::V128 => ir::types::I8X16,
-        // TODO maybe stack map?
-        ValType::Ref(_) => todo!(),
+        WasmValType::I32 => ir::types::I32,
+        WasmValType::I64 => ir::types::I64,
+        WasmValType::F32 => ir::types::F32,
+        WasmValType::F64 => ir::types::F64,
+        WasmValType::V128 => ir::types::I8X16,
+        WasmValType::Ref(rf) => reference_type(&rf.heap_type, pointer_type),
+    }
+}
+
+/// Returns the reference type to use for the provided wasm type.
+pub fn reference_type(wasm_ht: &WasmHeapType, pointer_type: ir::Type) -> ir::Type {
+    match wasm_ht.top().inner {
+        WasmHeapTopTypeInner::Func => pointer_type,
+        WasmHeapTopTypeInner::Any | WasmHeapTopTypeInner::Extern => todo!(),
+        WasmHeapTopTypeInner::Exn => todo!(),
+        WasmHeapTopTypeInner::Cont => todo!(),
     }
 }
 
@@ -70,23 +84,12 @@ fn blank_sig(isa: &dyn TargetIsa, call_conv: CallConv) -> Signature {
     sig
 }
 
-pub fn wasm_call_signature(isa: &dyn TargetIsa, func_ty: &FuncType) -> Signature {
+pub fn wasm_call_signature(isa: &dyn TargetIsa, func_ty: &WasmFuncType) -> Signature {
     let mut sig = blank_sig(isa, CallConv::Fast);
 
-    let cvt = |ty: &ValType| AbiParam::new(value_type(*ty));
-    sig.params.extend(func_ty.params().iter().map(&cvt));
-    sig.returns.extend(func_ty.results().iter().map(&cvt));
-
-    sig
-}
-
-#[allow(unused)]
-pub fn native_call_signature(isa: &dyn TargetIsa, wasm_func_ty: &FuncType) -> Signature {
-    let mut sig = blank_sig(isa, CallConv::triple_default(isa.triple()));
-
-    let cvt = |ty: &ValType| AbiParam::new(value_type(*ty));
-    sig.params.extend(wasm_func_ty.params().iter().map(&cvt));
-    sig.returns.extend(wasm_func_ty.results().iter().map(&cvt));
+    let cvt = |ty: &WasmValType| AbiParam::new(value_type(ty, isa.pointer_type()));
+    sig.params.extend(func_ty.params.iter().map(&cvt));
+    sig.returns.extend(func_ty.results.iter().map(&cvt));
 
     sig
 }
@@ -135,4 +138,26 @@ pub fn round_usize_up_to_host_pages(bytes: usize) -> usize {
     let bytes = u64::try_from(bytes).unwrap();
     let rounded = round_u64_up_to_host_pages(bytes);
     usize::try_from(rounded).unwrap()
+}
+
+pub(crate) trait HashMapEntryTryExt<'a, K, V, S>: Sized {
+    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
+    where
+        K: Hash,
+        S: BuildHasher;
+}
+
+impl<'a, K, V, S, A: Allocator> HashMapEntryTryExt<'a, K, V, S>
+    for hashbrown::hash_map::Entry<'a, K, V, S, A>
+{
+    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        match self {
+            hashbrown::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+            hashbrown::hash_map::Entry::Vacant(entry) => Ok(entry.insert(default()?)),
+        }
+    }
 }

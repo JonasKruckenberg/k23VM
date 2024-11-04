@@ -33,7 +33,7 @@
 (invoke "copy" (i32.const 0x10000) (i32.const 0) (i32.const 0))
 (invoke "copy" (i32.const 0) (i32.const 0x10000) (i32.const 0))
 
-;; Copying 0 bytes outside the memory trap_handling.
+;; Copying 0 bytes outside the memory traps.
 (assert_trap (invoke "copy" (i32.const 0x10001) (i32.const 0) (i32.const 0))
     "out of bounds memory access")
 (assert_trap (invoke "copy" (i32.const 0) (i32.const 0x10001) (i32.const 0))

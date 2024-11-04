@@ -575,7 +575,7 @@
 )
 (assert_return (invoke $Mm "load" (i32.const 0)) (i32.const 97))
 
-;; Store is modified if the start function trap_handling.
+;; Store is modified if the start function traps.
 (module $Ms
   (type $t (func (result i32)))
   (memory (export "memory") 1)

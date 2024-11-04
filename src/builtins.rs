@@ -4,8 +4,7 @@ use cranelift_entity::entity_impl;
 macro_rules! foreach_builtin_function {
     ($mac:ident) => {
         $mac! {
-            // Raises an unconditional trap.
-            trap(vmctx: vmctx, code: u8);
+            // no builtins yet
         }
     };
 }
