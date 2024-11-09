@@ -176,7 +176,7 @@ impl RecGroupEntry {
     #[must_use = "caller must remove entry from registry if `decref` returns `true`"]
     fn decr_ref_count(&self, why: &str) -> bool {
         let old_count = self.0.registrations.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(old_count, 0);
+        debug_assert_ne!(old_count, 0, );
         tracing::trace!(
             "decrement registration count for {self:?} (registrations -> {}): {why}",
             old_count - 1
@@ -278,8 +278,11 @@ impl TypeRegistryInner {
                 .collect::<Box<[_]>>(),
         );
 
-        if let Some(rec_group) = self.hash_consing_map.get(&hash_consing_key) {
-            return rec_group.clone();
+        if let Some(entry) = self.hash_consing_map.get(&hash_consing_key) {
+            entry.incr_ref_count(
+                "hash consed to already-registered type in `TypeRegistryInner::register_rec_group`",
+            );
+            return entry.clone();
         }
 
         // increase the ref of referenced groups, they must remain alive as
