@@ -4,6 +4,7 @@ use crate::translate::{WasmHeapTopTypeInner, WasmHeapType, WasmValType};
 use crate::{enum_accessors, Store};
 use core::ptr;
 
+#[derive(Debug, Clone, Copy)]
 pub enum Val {
     /// A 32-bit integer.
     I32(i32),

@@ -2,7 +2,7 @@ use crate::runtime::VMMemoryImport;
 use crate::store::Stored;
 use crate::{runtime, Store};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Memory(Stored<runtime::ExportedMemory>);
 
 impl Memory {

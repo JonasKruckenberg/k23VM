@@ -2,7 +2,7 @@ use crate::runtime::VMTableImport;
 use crate::store::Stored;
 use crate::{runtime, Store};
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Table(Stored<runtime::ExportedTable>);
 
 impl Table {

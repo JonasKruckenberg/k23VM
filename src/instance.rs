@@ -7,6 +7,7 @@ use crate::store::Stored;
 use crate::table::Table;
 use crate::{runtime, Export, Extern, Module, Store};
 
+#[derive(Debug, Clone, Copy)]
 pub struct Instance(Stored<runtime::Instance>);
 
 impl Instance {

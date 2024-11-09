@@ -2,7 +2,7 @@ use crate::runtime::VMGlobalImport;
 use crate::store::Stored;
 use crate::{runtime, Store, Val};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Global(Stored<runtime::ExportedGlobal>);
 
 impl Global {
