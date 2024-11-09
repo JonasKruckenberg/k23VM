@@ -33,7 +33,7 @@ impl Val {
     /// Returns the null reference for the given heap type.
     #[inline]
     pub fn null_ref(heap_type: &WasmHeapType) -> Self {
-        Ref::null(&heap_type).into()
+        Ref::null(heap_type).into()
     }
 
     /// Returns the null function reference value.
@@ -72,7 +72,7 @@ impl Val {
             WasmValType::I64 => Self::I64(raw.get_i64()),
             WasmValType::F32 => Self::F32(raw.get_f32()),
             WasmValType::F64 => Self::F64(raw.get_f64()),
-            WasmValType::V128 => Self::V128(raw.get_v128().into()),
+            WasmValType::V128 => Self::V128(raw.get_v128()),
             WasmValType::Ref(_) => todo!(),
         }
     }

@@ -290,7 +290,7 @@ impl Instance {
             .vmctx
             .plus_offset::<u32>(u32::from(self.module.vmoffsets().static_.vmctx_magic()))
     }
-    pub(crate) unsafe fn vmctx_type_ids(&self) -> () {
+    pub(crate) unsafe fn vmctx_type_ids(&self) {
         *self
             .vmctx
             .plus_offset(u32::from(self.module.vmoffsets().static_.vmctx_type_ids()))
@@ -475,7 +475,7 @@ unsafe fn initialize_tables(
         let val = match init {
             TableInitialValue::RefNull => None,
             TableInitialValue::ConstExpr(expr) => {
-                let funcref = const_eval.eval(&expr)?.get_funcref();
+                let funcref = const_eval.eval(expr)?.get_funcref();
                 // TODO assert funcref ptr is valid
                 Some(NonNull::new(funcref.cast()).unwrap())
             }
