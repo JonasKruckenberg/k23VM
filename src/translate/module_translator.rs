@@ -285,7 +285,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
             self.result.module.imports.push(Import {
                 module: import.module.to_string(),
-                name: import.module.to_string(),
+                name: import.name.to_string(),
                 ty: index,
             });
         }
