@@ -1,3 +1,24 @@
+//! ```rust,ignore
+//! struct VMContext {
+//!     magic: u32,
+//!     _padding: u32, // on 64-bit platforms
+//!     builtin_functions: *const VMBuiltinFunctionsArray,
+//!     type_ids: *const VMSharedTypeIndex,
+//!     stack_limit: *const u8,
+//!     last_wasm_exit_fp: *const u8,
+//!     last_wasm_exit_pc: *const u8,
+//!     last_wasm_entry_fp: *const u8,
+//!     func_refs: [VMFuncRef; num_escaped_funcs],
+//!     imported_functions: [VMFunctionImport; num_imported_functions)],
+//!     imported_tables: [VMTableImport; num_imported_tables],
+//!     imported_memories: [VMMemoryImport; num_imported_memories],
+//!     imported_globals: [VMGlobalImport; num_imported_globals],
+//!     tables: [VMTableDefinition; num_defined_tables],
+//!     memories: [VMMemoryDefinition; num_defined_memories],
+//!     globals: [VMGlobalDefinition; num_defined_globals],
+//! }
+//! ```
+
 use crate::indices::{
     DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex, FuncIndex, FuncRefIndex,
     GlobalIndex, MemoryIndex, TableIndex,
@@ -358,6 +379,42 @@ impl VMOffsets {
     pub fn vmctx_vmglobal_definition(&self, index: DefinedGlobalIndex) -> u32 {
         assert!(index.as_u32() < self.num_defined_globals);
         self.vmctx_globals_begin() + index.as_u32() * u32_size_of::<VMGlobalDefinition>()
+    }
+    #[inline]
+    pub fn num_imported_funcs(&self) -> u32 {
+        self.num_imported_funcs
+    }
+    #[inline]
+    pub fn num_imported_tables(&self) -> u32 {
+        self.num_imported_tables
+    }
+    #[inline]
+    pub fn num_imported_memories(&self) -> u32 {
+        self.num_imported_memories
+    }
+    #[inline]
+    pub fn num_imported_globals(&self) -> u32 {
+        self.num_imported_globals
+    }
+    #[inline]
+    pub fn num_escaped_funcs(&self) -> u32 {
+        self.num_escaped_funcs
+    }
+    #[inline]
+    pub fn num_defined_tables(&self) -> u32 {
+        self.num_defined_tables
+    }
+    #[inline]
+    pub fn num_defined_memories(&self) -> u32 {
+        self.num_defined_memories
+    }
+    #[inline]
+    pub fn num_defined_globals(&self) -> u32 {
+        self.num_defined_globals
+    }
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.size
     }
 }
 

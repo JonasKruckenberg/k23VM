@@ -1,3 +1,4 @@
+use crate::compile::FunctionLoc;
 use crate::placeholder::mmap::Mmap;
 use crate::runtime::MmapVec;
 
@@ -40,5 +41,27 @@ impl CodeMemory {
     #[inline]
     pub fn text(&self) -> &[u8] {
         unsafe { self.mmap.slice(0..self.len) }
+    }
+
+    pub fn resolve_function_loc(&self, func_loc: FunctionLoc) -> usize {
+        let text_range = {
+            let r = self.text().as_ptr_range();
+            r.start as usize..r.end as usize
+        };
+
+        let addr = text_range.start + func_loc.start as usize;
+
+        tracing::trace!(
+            "resolve_function_loc {func_loc:?}, text {:?} => {:?}",
+            self.mmap.as_ptr(),
+            addr,
+        );
+
+        // Assert the function location actually lies in our text section
+        debug_assert!(
+            text_range.start <= addr && text_range.end >= addr + func_loc.length as usize
+        );
+
+        addr
     }
 }

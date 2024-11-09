@@ -102,8 +102,7 @@ impl Compiler for CraneliftCompiler {
         let vmctx = context.func.create_global_value(GlobalValueData::VMContext);
         let stack_limit = context.func.create_global_value(GlobalValueData::Load {
             base: vmctx,
-            offset: i32::from(self.offsets.vmctx_stack_limit())
-                .into(),
+            offset: i32::from(self.offsets.vmctx_stack_limit()).into(),
             global_type: isa.pointer_type(),
             flags: MemFlags::trusted(),
         });

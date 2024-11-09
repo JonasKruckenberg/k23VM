@@ -1,5 +1,5 @@
 use crate::compile::{CompileInputs, CompiledFunctionInfo};
-use crate::indices::{DefinedFuncIndex, EntityIndex};
+use crate::indices::{DefinedFuncIndex, EntityIndex, VMSharedTypeIndex};
 use crate::runtime::CodeMemory;
 use crate::runtime::{MmapVec, VMOffsets};
 use crate::translate::{Import, TranslatedModule};
@@ -10,7 +10,7 @@ use core::mem;
 use cranelift_entity::PrimaryMap;
 use wasmparser::Validator;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Module(Arc<ModuleInner>);
 
 #[derive(Debug)]
@@ -88,11 +88,17 @@ impl Module {
     pub(crate) fn translated(&self) -> &TranslatedModule {
         &self.0.translated
     }
+    pub(crate) fn vmoffsets(&self) -> &VMOffsets {
+        &self.0.offsets
+    }
     pub(crate) fn code(&self) -> &CodeMemory {
         &self.0.code
     }
-    pub(crate) fn vmoffsets(&self) -> &VMOffsets {
-        &self.0.offsets
+    pub(crate) fn type_collection(&self) -> &RuntimeTypeCollection {
+        &self.0.type_collection
+    }
+    pub(crate) fn type_ids(&self) -> &[VMSharedTypeIndex] {
+        self.0.type_collection.type_map().values().as_slice()
     }
     pub(crate) fn function_info(&self) -> &PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo> {
         &self.0.function_info

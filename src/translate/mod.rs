@@ -10,7 +10,6 @@ use crate::indices::{
     ElemIndex, EntityIndex, FieldIndex, FuncIndex, FuncRefIndex, GlobalIndex, LabelIndex,
     LocalIndex, MemoryIndex, ModuleInternedTypeIndex, TableIndex, TagIndex, TypeIndex,
 };
-use crate::translate::types::EntityType;
 use crate::{DEFAULT_OFFSET_GUARD_SIZE, WASM32_MAX_SIZE};
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -26,8 +25,8 @@ pub use module_translator::ModuleTranslator;
 pub use module_types::ModuleTypes;
 pub use type_convert::WasmparserTypeConverter;
 pub use types::{
-    WasmFuncType, WasmHeapTopTypeInner, WasmHeapType, WasmHeapTypeInner, WasmRecGroup, WasmRefType,
-    WasmSubType, WasmValType,
+    EntityType, WasmFuncType, WasmHeapTopTypeInner, WasmHeapType, WasmHeapTypeInner, WasmRecGroup,
+    WasmRefType, WasmSubType, WasmValType,
 };
 
 #[derive(Debug)]

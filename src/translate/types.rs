@@ -266,11 +266,13 @@ impl TypeTrace for WasmHeapType {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct WasmHeapTopType {
     pub shared: bool,
     pub inner: WasmHeapTopTypeInner,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum WasmHeapTopTypeInner {
     /// The common supertype of all external references.
     Extern,
