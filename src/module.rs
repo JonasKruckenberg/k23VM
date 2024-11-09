@@ -88,7 +88,7 @@ impl Module {
     pub(crate) fn translated(&self) -> &TranslatedModule {
         &self.0.translated
     }
-    pub(crate) fn vmoffsets(&self) -> &VMOffsets {
+    pub(crate) fn offsets(&self) -> &VMOffsets {
         &self.0.offsets
     }
     pub(crate) fn code(&self) -> &CodeMemory {

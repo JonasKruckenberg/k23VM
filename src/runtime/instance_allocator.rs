@@ -118,7 +118,7 @@ pub trait InstanceAllocator {
         match (|| unsafe {
             self.allocate_memories(module.translated(), &mut memories)?;
             self.allocate_tables(module.translated(), &mut tables)?;
-            self.allocate_vmctx(module.translated(), module.vmoffsets())
+            self.allocate_vmctx(module.translated(), module.offsets())
         })() {
             Ok(vmctx) => Ok((vmctx, tables, memories)),
             Err(e) => {

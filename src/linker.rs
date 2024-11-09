@@ -69,11 +69,11 @@ impl Linker {
             .exports(store)
             .map(|e| (self.import_key(module_name, Some(e.name)), e.value))
             .collect::<Vec<_>>(); // TODO can we somehow get rid of this?
-        
+
         for (key, ext) in exports {
             self.insert(key, ext)?;
         }
-        
+
         Ok(self)
     }
 
@@ -86,8 +86,12 @@ impl Linker {
     ) -> crate::Result<Instance> {
         let mut imports = Imports::with_capacity_for(module.translated());
         for import in module.imports() {
-            let def = self.get(&import.module, &import.name).unwrap_or_else(|| panic!("missing {:?} import {}::{}",
-                import.ty, import.module, import.name));
+            let def = self.get(&import.module, &import.name).unwrap_or_else(|| {
+                panic!(
+                    "missing {:?} import {}::{}",
+                    import.ty, import.module, import.name
+                )
+            });
 
             match (def, &import.ty) {
                 (Extern::Func(func), EntityType::Function(_ty)) => {

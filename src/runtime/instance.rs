@@ -1,6 +1,6 @@
 use crate::indices::{
     DataIndex, DefinedGlobalIndex, DefinedMemoryIndex, DefinedTableIndex, ElemIndex, EntityIndex,
-    FuncIndex, GlobalIndex, MemoryIndex, ModuleInternedTypeIndex, TableIndex, VMSharedTypeIndex,
+    FuncIndex, GlobalIndex, MemoryIndex, TableIndex, VMSharedTypeIndex,
 };
 use crate::runtime::builtins::VMBuiltinFunctionsArray;
 use crate::runtime::memory::Memory;
@@ -86,7 +86,7 @@ impl Instance {
 
         unsafe {
             let func_ref: *mut VMFuncRef = self.vmctx.plus_offset_mut::<VMFuncRef>(
-                self.module().vmoffsets().vmctx_vmfunc_ref(func.func_ref),
+                self.module().offsets().vmctx_vmfunc_ref(func.func_ref),
             );
             Some(func_ref)
         }
@@ -95,7 +95,7 @@ impl Instance {
         unsafe {
             &*self
                 .vmctx
-                .plus_offset(self.module().vmoffsets().vmctx_vmfunction_import(index))
+                .plus_offset(self.module().offsets().vmctx_vmfunction_import(index))
         }
     }
 
@@ -117,14 +117,14 @@ impl Instance {
     pub fn table_ptr(&mut self, index: DefinedTableIndex) -> *mut VMTableDefinition {
         unsafe {
             self.vmctx
-                .plus_offset_mut(self.module().vmoffsets().vmctx_vmtable_definition(index))
+                .plus_offset_mut(self.module().offsets().vmctx_vmtable_definition(index))
         }
     }
     pub fn imported_table(&self, index: TableIndex) -> &VMTableImport {
         unsafe {
             &*self
                 .vmctx
-                .plus_offset(self.module().vmoffsets().vmctx_vmtable_import(index))
+                .plus_offset(self.module().offsets().vmctx_vmtable_import(index))
         }
     }
 
@@ -146,14 +146,14 @@ impl Instance {
     pub fn memory_ptr(&mut self, index: DefinedMemoryIndex) -> *mut VMMemoryDefinition {
         unsafe {
             self.vmctx
-                .plus_offset_mut(self.module().vmoffsets().vmctx_vmmemory_definition(index))
+                .plus_offset_mut(self.module().offsets().vmctx_vmmemory_definition(index))
         }
     }
     pub fn imported_memory(&self, index: MemoryIndex) -> &VMMemoryImport {
         unsafe {
             &*self
                 .vmctx
-                .plus_offset(self.module().vmoffsets().vmctx_vmmemory_import(index))
+                .plus_offset(self.module().offsets().vmctx_vmmemory_import(index))
         }
     }
 
@@ -175,14 +175,14 @@ impl Instance {
     pub fn global_ptr(&mut self, index: DefinedGlobalIndex) -> *mut VMGlobalDefinition {
         unsafe {
             self.vmctx
-                .plus_offset_mut(self.module().vmoffsets().vmctx_vmglobal_definition(index))
+                .plus_offset_mut(self.module().offsets().vmctx_vmglobal_definition(index))
         }
     }
     pub fn imported_global(&self, index: GlobalIndex) -> &VMGlobalImport {
         unsafe {
             &*self
                 .vmctx
-                .plus_offset(self.module().vmoffsets().vmctx_vmglobal_import(index))
+                .plus_offset(self.module().offsets().vmctx_vmglobal_import(index))
         }
     }
 
@@ -239,12 +239,12 @@ impl Instance {
     pub(crate) unsafe fn vmctx_magic(&self) -> u32 {
         *self
             .vmctx
-            .plus_offset::<u32>(u32::from(self.module.vmoffsets().static_.vmctx_magic()))
+            .plus_offset::<u32>(u32::from(self.module.offsets().static_.vmctx_magic()))
     }
     pub(crate) unsafe fn vmctx_type_ids(&self) -> &[VMSharedTypeIndex] {
         let ptr = *self
             .vmctx
-            .plus_offset(u32::from(self.module.vmoffsets().static_.vmctx_type_ids()));
+            .plus_offset(u32::from(self.module.offsets().static_.vmctx_type_ids()));
 
         let len = self.module.type_collection().type_map().len();
 
@@ -252,87 +252,86 @@ impl Instance {
     }
     pub(crate) unsafe fn vmctx_builtin_functions(&self) -> *const VMBuiltinFunctionsArray {
         self.vmctx.plus_offset::<VMBuiltinFunctionsArray>(u32::from(
-            self.module.vmoffsets().static_.vmctx_builtin_functions(),
+            self.module.offsets().static_.vmctx_builtin_functions(),
         ))
     }
     pub(crate) unsafe fn vmctx_stack_limit(&self) -> usize {
-        *self.vmctx.plus_offset::<usize>(u32::from(
-            self.module.vmoffsets().static_.vmctx_stack_limit(),
-        ))
+        *self
+            .vmctx
+            .plus_offset::<usize>(u32::from(self.module.offsets().static_.vmctx_stack_limit()))
     }
     pub(crate) unsafe fn vmctx_last_wasm_exit_fp(&self) -> usize {
         *self.vmctx.plus_offset::<usize>(u32::from(
-            self.module.vmoffsets().static_.vmctx_last_wasm_exit_fp(),
+            self.module.offsets().static_.vmctx_last_wasm_exit_fp(),
         ))
     }
     pub(crate) unsafe fn vmctx_last_wasm_exit_pc(&self) -> usize {
         *self.vmctx.plus_offset::<usize>(u32::from(
-            self.module.vmoffsets().static_.vmctx_last_wasm_exit_pc(),
+            self.module.offsets().static_.vmctx_last_wasm_exit_pc(),
         ))
     }
     pub(crate) unsafe fn vmctx_last_wasm_entry_fp(&self) -> usize {
         *self.vmctx.plus_offset::<usize>(u32::from(
-            self.module.vmoffsets().static_.vmctx_last_wasm_entry_fp(),
+            self.module.offsets().static_.vmctx_last_wasm_entry_fp(),
         ))
     }
     pub(crate) unsafe fn vmctx_table_definitions(&self) -> &[VMTableDefinition] {
         slice::from_raw_parts(
             self.vmctx
-                .plus_offset::<VMTableDefinition>(self.module.vmoffsets().vmctx_tables_begin()),
-            self.module.vmoffsets().num_defined_tables() as usize,
+                .plus_offset::<VMTableDefinition>(self.module.offsets().vmctx_tables_begin()),
+            self.module.offsets().num_defined_tables() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_memory_definitions(&self) -> &[VMMemoryDefinition] {
         slice::from_raw_parts(
             self.vmctx
-                .plus_offset::<VMMemoryDefinition>(self.module.vmoffsets().vmctx_memories_begin()),
-            self.module.vmoffsets().num_defined_memories() as usize,
+                .plus_offset::<VMMemoryDefinition>(self.module.offsets().vmctx_memories_begin()),
+            self.module.offsets().num_defined_memories() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_global_definitions(&self) -> &[VMGlobalDefinition] {
         slice::from_raw_parts(
             self.vmctx
-                .plus_offset::<VMGlobalDefinition>(self.module.vmoffsets().vmctx_globals_begin()),
-            self.module.vmoffsets().num_defined_globals() as usize,
+                .plus_offset::<VMGlobalDefinition>(self.module.offsets().vmctx_globals_begin()),
+            self.module.offsets().num_defined_globals() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_func_refs(&self) -> &[VMFuncRef] {
         slice::from_raw_parts(
             self.vmctx
-                .plus_offset::<VMFuncRef>(self.module.vmoffsets().vmctx_func_refs_begin()),
-            self.module.vmoffsets().num_escaped_funcs() as usize,
+                .plus_offset::<VMFuncRef>(self.module.offsets().vmctx_func_refs_begin()),
+            self.module.offsets().num_escaped_funcs() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_function_imports(&self) -> &[VMFunctionImport] {
         slice::from_raw_parts(
             self.vmctx.plus_offset::<VMFunctionImport>(
-                self.module.vmoffsets().vmctx_imported_functions_begin(),
+                self.module.offsets().vmctx_imported_functions_begin(),
             ),
-            self.module.vmoffsets().num_imported_funcs() as usize,
+            self.module.offsets().num_imported_funcs() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_table_imports(&self) -> &[VMTableImport] {
         slice::from_raw_parts(
-            self.vmctx.plus_offset::<VMTableImport>(
-                self.module.vmoffsets().vmctx_imported_tables_begin(),
-            ),
-            self.module.vmoffsets().num_imported_tables() as usize,
+            self.vmctx
+                .plus_offset::<VMTableImport>(self.module.offsets().vmctx_imported_tables_begin()),
+            self.module.offsets().num_imported_tables() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_memory_imports(&self) -> &[VMMemoryImport] {
         slice::from_raw_parts(
             self.vmctx.plus_offset::<VMMemoryImport>(
-                self.module.vmoffsets().vmctx_imported_memories_begin(),
+                self.module.offsets().vmctx_imported_memories_begin(),
             ),
-            self.module.vmoffsets().num_imported_memories() as usize,
+            self.module.offsets().num_imported_memories() as usize,
         )
     }
     pub(crate) unsafe fn vmctx_global_imports(&self) -> &[VMGlobalImport] {
         slice::from_raw_parts(
             self.vmctx.plus_offset::<VMGlobalImport>(
-                self.module.vmoffsets().vmctx_imported_globals_begin(),
+                self.module.offsets().vmctx_imported_globals_begin(),
             ),
-            self.module.vmoffsets().num_imported_globals() as usize,
+            self.module.offsets().num_imported_globals() as usize,
         )
     }
 }
@@ -345,7 +344,7 @@ unsafe fn initialize_vmctx(
     module: &Module,
     imports: Imports,
 ) -> crate::Result<()> {
-    let offsets = module.vmoffsets();
+    let offsets = module.offsets();
 
     // initialize vmctx magic
     *vmctx.plus_offset_mut(u32::from(offsets.static_.vmctx_magic())) = VMCONTEXT_MAGIC;
@@ -413,7 +412,7 @@ unsafe fn initialize_vmctx(
     for (def_index, init_expr) in module.translated().global_initializers.iter() {
         let val = const_eval.eval(init_expr)?;
         let ptr = vmctx.plus_offset_mut::<VMGlobalDefinition>(
-            module.vmoffsets().vmctx_vmglobal_definition(def_index),
+            module.offsets().vmctx_vmglobal_definition(def_index),
         );
         ptr.write(VMGlobalDefinition::from_vmval(val))
     }
