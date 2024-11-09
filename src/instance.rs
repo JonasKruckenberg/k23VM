@@ -5,7 +5,7 @@ use crate::memory::Memory;
 use crate::runtime::{ConstExprEvaluator, Imports, InstanceAllocator};
 use crate::store::Stored;
 use crate::table::Table;
-use crate::{runtime, Extern, Module, Store};
+use crate::{runtime, Export, Extern, Module, Store};
 
 pub struct Instance(Stored<runtime::Instance>);
 
@@ -26,12 +26,35 @@ impl Instance {
         store[self.0].module()
     }
 
-    // pub fn exports<'a>(
-    //     &'a self,
-    //     store: &'a mut Store,
-    // ) -> impl ExactSizeIterator<Item = Export<'a>> + 'a {
-    //     todo!()
-    // }
+    pub(crate) fn exports<'a>(
+        &self,
+        store: &'a mut Store,
+    ) -> impl ExactSizeIterator<Item = Export<'a>> + 'a {
+        let exports = &store[self.0].exports;
+        if exports.iter().any(|e| e.is_none()) {
+            let module = store[self.0].module().clone();
+
+            for name in module.translated().exports.keys() {
+                if let Some((export_name_index, _, &entity)) =
+                    module.translated().exports.get_full(name)
+                {
+                    self._get_export(store, entity, export_name_index);
+                }
+            }
+        }
+
+        let instance = &store[self.0];
+        let module = instance.module();
+        module
+            .translated()
+            .exports
+            .iter()
+            .zip(&instance.exports)
+            .map(|((name, _), export)| Export {
+                name,
+                value: export.clone().unwrap(),
+            })
+    }
 
     pub fn get_export(&self, store: &mut Store, name: &str) -> Option<Extern> {
         let (export_name_index, _, index) =

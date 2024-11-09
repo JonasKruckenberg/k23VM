@@ -155,6 +155,8 @@ mod tests {
             )
             .unwrap();
 
+        instance.debug_vmctx(&store);
+
         tracing::trace!("getting fib function...");
         let func = instance.get_func(&mut store, "fib").unwrap();
 
@@ -162,6 +164,58 @@ mod tests {
         let mut results = vec![Val::I32(0)];
         func.call(&mut store, &[Val::I32(9)], &mut results).unwrap();
         assert_eq!(results[0].unwrap_i32(), 55);
+    }
+
+    #[test_log::test]
+    fn test_fib() {
+        let engine = Engine::default();
+        let mut validator = Validator::new();
+        let mut linker = Linker::new(&engine);
+        let mut store = Store::new(&engine);
+        let mut const_eval = ConstExprEvaluator::default();
+
+        // instantiate & define the fib_cpp module
+        {
+            let module = Module::from_bytes(
+                &engine,
+                &mut validator,
+                include_bytes!("../tests/fib_cpp.wasm"),
+            )
+            .unwrap();
+
+            let instance = linker
+                .instantiate(
+                    &mut store,
+                    &PlaceholderAllocatorDontUse,
+                    &mut const_eval,
+                    &module,
+                )
+                .unwrap();
+            instance.debug_vmctx(&store);
+
+            linker.define_instance(&mut store, "fib_cpp", instance).unwrap();
+        }
+
+        // instantiate the test module
+        {
+            let module = Module::from_bytes(
+                &engine,
+                &mut validator,
+                include_bytes!("../tests/fib_test.wasm"),
+            )
+                .unwrap();
+
+            let instance = linker
+                .instantiate(
+                    &mut store,
+                    &PlaceholderAllocatorDontUse,
+                    &mut const_eval,
+                    &module,
+                )
+                .unwrap();
+
+            instance.debug_vmctx(&store);
+        }
     }
 
     #[test_log::test]
