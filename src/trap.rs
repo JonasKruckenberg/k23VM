@@ -65,7 +65,7 @@ impl fmt::Display for Trap {
             Trap::StackOverflow => f.write_str("call stack exhausted"),
             Trap::MemoryOutOfBounds => f.write_str("out of bounds memory access"),
             Trap::IntegerOverflow => f.write_str("integer overflow"),
-            Trap::IntegerDivisionByZero => f.write_str("integer division by zero"),
+            Trap::IntegerDivisionByZero => f.write_str("integer divide by zero"),
             Trap::BadConversionToInteger => f.write_str("invalid conversion to integer"),
         }
     }
