@@ -165,7 +165,7 @@ spectests!(
     table_set "./spec/table_set.wast",
     table_size "./spec/table_size.wast",
     token "./spec/token.wast",
-    traps "./spec/trap_handling.wast",
+    traps "./spec/traps.wast",
     type_ "./spec/type.wast",
     unreachable "./spec/unreachable.wast",
     unreached_invalid "./spec/unreached-invalid.wast",
