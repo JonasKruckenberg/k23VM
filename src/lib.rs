@@ -39,6 +39,7 @@ pub use linker::Linker;
 pub use memory::Memory;
 pub use module::Module;
 pub use placeholder::instance_allocator::PlaceholderAllocatorDontUse;
+pub use runtime::{ConstExprEvaluator, InstanceAllocator};
 pub use store::Store;
 pub use table::Table;
 pub use translate::ModuleTranslator;
@@ -193,7 +194,9 @@ mod tests {
                 .unwrap();
             instance.debug_vmctx(&store);
 
-            linker.define_instance(&mut store, "fib_cpp", instance).unwrap();
+            linker
+                .define_instance(&mut store, "fib_cpp", instance)
+                .unwrap();
         }
 
         // instantiate the test module
@@ -203,7 +206,7 @@ mod tests {
                 &mut validator,
                 include_bytes!("../tests/fib_test.wasm"),
             )
-                .unwrap();
+            .unwrap();
 
             let instance = linker
                 .instantiate(
@@ -215,6 +218,9 @@ mod tests {
                 .unwrap();
 
             instance.debug_vmctx(&store);
+
+            let func = instance.get_func(&mut store, "fib_test").unwrap();
+            func.call(&mut store, &[], &mut []).unwrap();
         }
     }
 

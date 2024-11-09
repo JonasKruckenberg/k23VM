@@ -8,9 +8,9 @@ use crate::runtime::table::Table;
 use crate::runtime::vmcontext::{VMArrayCallFunction, VMGlobalDefinition, VMWasmCallFunction};
 use crate::runtime::{
     ConstExprEvaluator, Export, ExportedFunction, ExportedGlobal, ExportedMemory, ExportedTable,
-    Imports, InstanceAllocator, OwnedVMContext, VMFuncRef, VMFunctionImport, VMGlobalImport,
-    VMMemoryDefinition, VMMemoryImport, VMOffsets, VMOpaqueContext, VMTableDefinition,
-    VMTableImport, VMCONTEXT_MAGIC,
+    Imports, InstanceAllocator, OwnedVMContext, VMContext, VMFuncRef, VMFunctionImport,
+    VMGlobalImport, VMMemoryDefinition, VMMemoryImport, VMOffsets, VMOpaqueContext,
+    VMTableDefinition, VMTableImport, VMCONTEXT_MAGIC,
 };
 use crate::translate::{TableInitialValue, TableSegmentElements};
 use crate::{Extern, Module};
@@ -69,6 +69,14 @@ impl Instance {
 
     pub fn module(&self) -> &Module {
         &self.module
+    }
+
+    pub fn vmctx(&self) -> *const VMContext {
+        self.vmctx.as_ptr()
+    }
+
+    pub fn vmctx_mut(&mut self) -> *mut VMContext {
+        self.vmctx.as_mut_ptr()
     }
 
     pub fn get_exported_func(&mut self, index: FuncIndex) -> ExportedFunction {

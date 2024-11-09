@@ -7,6 +7,8 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
+use core::fmt;
+use core::fmt::Debug;
 use core::hash::{Hash, Hasher};
 use core::ops::Range;
 use core::sync::atomic::Ordering::Acquire;
@@ -134,54 +136,89 @@ impl Drop for RuntimeTypeCollection {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RecGroupEntry(Arc<RecGroupEntryInner>);
-
-#[derive(Debug)]
-struct RecGroupEntryInner {
-    hash_consing_key: WasmRecGroup,
-    shared_type_indices: Box<[VMSharedTypeIndex]>,
-    registrations: AtomicUsize,
+pub struct RegisteredType {
+    engine: Engine,
+    entry: RecGroupEntry,
+    ty: Arc<WasmSubType>,
+    index: VMSharedTypeIndex,
 }
 
-impl PartialEq for RecGroupEntry {
+impl RegisteredType {
+    pub fn index(&self) -> VMSharedTypeIndex {
+        self.index
+    }
+}
+
+impl Debug for RegisteredType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let RegisteredType {
+            engine: _,
+            entry: _,
+            ty,
+            index,
+        } = self;
+        f.debug_struct("RegisteredType")
+            .field("index", index)
+            .field("ty", ty)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Clone for RegisteredType {
+    fn clone(&self) -> Self {
+        self.entry.incr_ref_count("cloning RegisteredType");
+        RegisteredType {
+            engine: self.engine.clone(),
+            entry: self.entry.clone(),
+            ty: self.ty.clone(),
+            index: self.index,
+        }
+    }
+}
+
+impl Drop for RegisteredType {
+    fn drop(&mut self) {
+        if self.entry.decr_ref_count("dropping RegisteredType") {
+            self.engine
+                .type_registry()
+                .0
+                .write()
+                .unregister_entry(self.entry.clone());
+        }
+    }
+}
+
+impl core::ops::Deref for RegisteredType {
+    type Target = WasmSubType;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ty
+    }
+}
+
+impl PartialEq for RegisteredType {
     fn eq(&self, other: &Self) -> bool {
-        self.0.hash_consing_key == other.0.hash_consing_key
+        let eq = Arc::ptr_eq(&self.entry.0, &other.entry.0);
+
+        // if cfg!(debug_assertions) {
+        //     if eq {
+        //         assert!(Engine::same(&self.engine, &other.engine));
+        //         assert_eq!(self.ty, other.ty);
+        //     } else {
+        //         assert!(self.ty != other.ty || !Engine::same(&self.engine, &other.engine));
+        //     }
+        // }
+
+        eq
     }
 }
 
-impl Eq for RecGroupEntry {}
+impl Eq for RegisteredType {}
 
-impl Hash for RecGroupEntry {
+impl Hash for RegisteredType {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash_consing_key.hash(state);
-    }
-}
-
-impl Borrow<WasmRecGroup> for RecGroupEntry {
-    fn borrow(&self) -> &WasmRecGroup {
-        &self.0.hash_consing_key
-    }
-}
-
-impl RecGroupEntry {
-    fn incr_ref_count(&self, why: &str) {
-        let old_count = self.0.registrations.fetch_add(1, Ordering::AcqRel);
-        tracing::trace!(
-            "increment registration count for {self:?} (registrations -> {}): {why}",
-            old_count + 1
-        );
-    }
-
-    #[must_use = "caller must remove entry from registry if `decref` returns `true`"]
-    fn decr_ref_count(&self, why: &str) -> bool {
-        let old_count = self.0.registrations.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(old_count, 0, );
-        tracing::trace!(
-            "decrement registration count for {self:?} (registrations -> {}): {why}",
-            old_count - 1
-        );
-        old_count == 1
+        let ptr = Arc::as_ptr(&self.entry.0);
+        ptr.hash(state);
     }
 }
 
@@ -207,6 +244,34 @@ impl TypeRegistry {
             types,
         }
     }
+
+    pub fn get_type(&self, engine: &Engine, index: VMSharedTypeIndex) -> Option<RegisteredType> {
+        let id = shared_type_index_to_slab_id(index);
+        let inner = self.0.read();
+
+        let ty = inner.types.get(id)?.clone();
+        let entry = inner.type_to_rec_group[index].clone().unwrap();
+
+        entry.incr_ref_count("TypeRegistry::get_type");
+
+        debug_assert!(entry.0.registrations.load(Acquire) != 0);
+        Some(RegisteredType {
+            engine: engine.clone(),
+            entry,
+            ty,
+            index,
+        })
+    }
+}
+
+#[inline]
+fn shared_type_index_to_slab_id(index: VMSharedTypeIndex) -> wasmtime_slab::Id {
+    wasmtime_slab::Id::from_raw(index.as_u32())
+}
+
+#[inline]
+fn slab_id_to_shared_type_index(id: wasmtime_slab::Id) -> VMSharedTypeIndex {
+    VMSharedTypeIndex::from_u32(id.into_raw())
 }
 
 #[derive(Debug, Default)]
@@ -350,7 +415,7 @@ impl TypeRegistryInner {
 
         // Add the type to our slab.
         let id = self.types.alloc(Arc::new(ty));
-        let engine_index = VMSharedTypeIndex::from_u32(id.into_raw());
+        let engine_index = slab_id_to_shared_type_index(id);
         tracing::trace!(
             "registered type {module_index:?} as {engine_index:?} = {:?}",
             &self.types[id]
@@ -437,7 +502,7 @@ impl TypeRegistryInner {
                 let removed_entry = self.type_to_rec_group[index].take();
                 debug_assert_eq!(removed_entry.unwrap(), entry);
 
-                let id = wasmtime_slab::Id::from_raw(index.as_bits());
+                let id = shared_type_index_to_slab_id(index);
                 self.types.dealloc(id);
             }
 
@@ -474,5 +539,56 @@ impl Drop for TypeRegistryInner {
             drop_stack.is_empty(),
             "type registry not empty: drop stack is not empty: {drop_stack:#?}"
         );
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RecGroupEntry(Arc<RecGroupEntryInner>);
+
+#[derive(Debug)]
+struct RecGroupEntryInner {
+    hash_consing_key: WasmRecGroup,
+    shared_type_indices: Box<[VMSharedTypeIndex]>,
+    registrations: AtomicUsize,
+}
+
+impl PartialEq for RecGroupEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.hash_consing_key == other.0.hash_consing_key
+    }
+}
+
+impl Eq for RecGroupEntry {}
+
+impl Hash for RecGroupEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash_consing_key.hash(state);
+    }
+}
+
+impl Borrow<WasmRecGroup> for RecGroupEntry {
+    fn borrow(&self) -> &WasmRecGroup {
+        &self.0.hash_consing_key
+    }
+}
+
+impl RecGroupEntry {
+    fn incr_ref_count(&self, why: &str) {
+        let old_count = self.0.registrations.fetch_add(1, Ordering::AcqRel);
+        tracing::trace!(
+            "increment registration count for {self:?} (registrations -> {}): {why}",
+            old_count + 1
+        );
+    }
+
+    #[must_use = "caller must remove entry from registry if `decref` returns `true`"]
+    fn decr_ref_count(&self, why: &str) -> bool {
+        let old_count = self.0.registrations.fetch_sub(1, Ordering::AcqRel);
+        debug_assert_ne!(old_count, 0,);
+        tracing::trace!(
+            "decrement registration count for {self:?} (registrations -> {}): {why}",
+            old_count - 1
+        );
+        old_count == 1
     }
 }
