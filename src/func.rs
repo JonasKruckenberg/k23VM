@@ -1,12 +1,14 @@
 use crate::indices::VMSharedTypeIndex;
+use crate::placeholder::trap_handling::TrapReason;
 use crate::runtime::{StaticVMOffsets, VMContext, VMFunctionImport, VMVal};
 use crate::store::Stored;
 use crate::translate::WasmFuncType;
 use crate::type_registry::RegisteredType;
 use crate::values::Val;
 use crate::{placeholder, runtime, Store, MAX_WASM_STACK};
+use alloc::string::ToString;
 use core::ffi::c_void;
-use core::{mem, ptr};
+use core::mem;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Func(Stored<runtime::ExportedFunction>);
@@ -79,13 +81,32 @@ impl Func {
         let module = store[store.get_instance_from_vmctx(vmctx)].module();
 
         let _guard = enter_wasm(vmctx, &module.offsets().static_);
+        
+        unsafe { placeholder::signals::ensure_signal_handlers_are_registered() }
 
-        // TODO catch traps
+        let res = placeholder::trap_handling::catch_traps(
+            vmctx,
+            module.offsets().static_.clone(),
+            |caller| {
+                (func_ref.array_call)(vmctx, caller, args_results_ptr, args_results_len);
+            },
+        );
 
-        (func_ref.array_call)(vmctx, ptr::null_mut(), args_results_ptr, args_results_len);
+        if let Err(trap) = res {
+            let (_pc, trap_code, message) = match trap.reason {
+                TrapReason::Wasm(trap_code) => (None, trap_code, "k23 builtin produced a trap"),
+                TrapReason::Jit {
+                    pc,
+                    faulting_addr: _, // TODO make use of this
+                    trap: trap_code,
+                } => (Some(pc), trap_code, "JIT-compiled WASM produced a trap"),
+            };
 
-        // TODO convert trap to error
-        // TODO restore previous stack limit
+            return Err(crate::Error::Trap {
+                trap: trap_code,
+                message: message.to_string(),
+            });
+        }
 
         Ok(())
     }

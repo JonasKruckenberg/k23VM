@@ -1,21 +1,28 @@
+use alloc::vec::Vec;
 use crate::compile::FunctionLoc;
 use crate::placeholder::mmap::Mmap;
 use crate::runtime::MmapVec;
+use crate::trap::Trap;
 
 #[derive(Debug)]
 pub struct CodeMemory {
     mmap: Mmap,
     len: usize,
     published: bool,
+
+    trap_offsets: Vec<u32>, 
+    traps: Vec<Trap>
 }
 
 impl CodeMemory {
-    pub fn new(mmap_vec: MmapVec<u8>) -> Self {
+    pub fn new(mmap_vec: MmapVec<u8>, trap_offsets: Vec<u32>, traps: Vec<Trap>) -> Self {
         let (mmap, size) = mmap_vec.into_parts();
         Self {
             mmap,
             len: size,
             published: false,
+            trap_offsets,
+            traps
         }
     }
 
@@ -63,5 +70,15 @@ impl CodeMemory {
         );
 
         addr
+    }
+
+    pub fn lookup_trap_code(&self, text_offset: usize) -> Option<Trap> {
+        let text_offset = u32::try_from(text_offset).unwrap();
+        
+        let index = self.trap_offsets
+            .binary_search_by_key(&text_offset, |val| *val)
+            .ok()?;
+
+        Trap::try_from(self.traps[index]).ok()
     }
 }

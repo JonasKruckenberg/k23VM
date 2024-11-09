@@ -1,7 +1,8 @@
 //! #k23VM - k23 WebAssembly Virtual Machine
 
-#![feature(allocator_api)]
 #![cfg_attr(feature = "no_std", no_std)]
+#![feature(allocator_api)]
+#![feature(thread_local)]
 #![warn(missing_docs)]
 
 extern crate alloc;
@@ -130,6 +131,7 @@ mod tests {
     use capstone::arch::BuildsCapstone;
     use capstone::Capstone;
     use wasmparser::Validator;
+    use crate::trap::Trap;
 
     #[test_log::test]
     fn fib_cpp() {
@@ -222,6 +224,56 @@ mod tests {
             let func = instance.get_func(&mut store, "fib_test").unwrap();
             func.call(&mut store, &[], &mut []).unwrap();
         }
+    }
+
+    #[test_log::test]
+    fn unreachable_trap() {
+        let str = r#"
+        (module
+            (func (export "main")
+                unreachable
+            )
+        )"#;
+
+        let engine = Engine::default();
+        let mut validator = Validator::new();
+        let mut linker = Linker::new(&engine);
+        let mut store = Store::new(&engine);
+        let mut const_eval = ConstExprEvaluator::default();
+
+        let module = Module::from_str(&engine, &mut validator, str).unwrap();
+
+        let cs = Capstone::new()
+            .arm64()
+            .detail(true)
+            .mode(ArchMode::Arm)
+            .build()
+            .expect("Failed to create Capstone object");
+
+        for (index, info) in module.function_info() {
+            let range = info.wasm_func_loc.start as usize
+                ..info.wasm_func_loc.start as usize + info.wasm_func_loc.length as usize;
+            let insns = cs
+                .disasm_all(&module.code().text()[range.clone()], range.start as u64)
+                .expect("Failed to disassemble");
+            tracing::debug!("{index:?}\n{insns}");
+        }
+
+        let instance = linker
+            .instantiate(
+                &mut store,
+                &PlaceholderAllocatorDontUse,
+                &mut const_eval,
+                &module,
+            )
+            .unwrap();
+
+        instance.debug_vmctx(&store);
+        
+        let func = instance.get_func(&mut store, "main").unwrap();
+        let res = func.call(&mut store, &[], &mut []);
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), Error::Trap { trap: Trap::UnreachableCodeReached, .. }))
     }
 
     #[test_log::test]

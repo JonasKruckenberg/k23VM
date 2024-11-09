@@ -19,7 +19,7 @@ pub const TRAP_NULL_REFERENCE: TrapCode =
 pub const TRAP_I31_NULL_REFERENCE: TrapCode =
     TrapCode::unwrap_user(Trap::NullI31Ref as u8 + TRAP_OFFSET);
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Trap {
     /// Internal assertion failed
     InternalAssertionFailed,

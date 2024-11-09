@@ -9,6 +9,7 @@ use alloc::sync::Arc;
 use core::mem;
 use cranelift_entity::PrimaryMap;
 use wasmparser::Validator;
+use crate::trap::Trap;
 
 #[derive(Debug, Clone)]
 pub struct Module(Arc<ModuleInner>);
@@ -17,7 +18,7 @@ pub struct Module(Arc<ModuleInner>);
 struct ModuleInner {
     translated: TranslatedModule,
     offsets: VMOffsets,
-    code: CodeMemory,
+    code: Arc<CodeMemory>,
     type_collection: RuntimeTypeCollection,
     function_info: PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo>,
 }
@@ -43,15 +44,18 @@ impl Module {
         let inputs = CompileInputs::from_module(&translation, &types, function_body_data);
 
         let unlinked_outputs = inputs.compile(engine.compiler())?;
-        let (code, function_info) =
+        let (code, function_info, (trap_offsets, traps)) =
             unlinked_outputs.link_and_finish(engine, &translation.module)?;
 
         let type_collection = engine.type_registry().register_module_types(engine, types);
 
         tracing::trace!("Allocating new memory map for compiled module...");
         let vec = MmapVec::from_slice(&code)?;
-        let mut code = CodeMemory::new(vec);
+        let mut code = CodeMemory::new(vec, trap_offsets, traps);
         code.publish()?;
+        let code = Arc::new(code);
+        
+        crate::placeholder::code_registry::register_code(&code);
 
         Ok(Self(Arc::new(ModuleInner {
             offsets: VMOffsets::for_module(

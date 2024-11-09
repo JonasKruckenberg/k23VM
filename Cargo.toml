@@ -15,7 +15,6 @@ harness = false
 
 [dependencies]
 tracing = { version = "0.1.40", default-features = false, features = ["attributes", "log"] }
-#object = { version = "0.36.4", default-features = false, features = ["read_core", "write_core", "elf"] }
 gimli = { version = "0.31.0", default-features = false, features = ["read"] }
 onlyerror = { version = "0.1.4", default-features = false }
 smallvec = { version = "1.6.1", features = ["union"] }
@@ -23,7 +22,7 @@ cfg-if = "1.0.0"
 
 rustix = { version = "0.38.37", default-features = false, features = ["mm"] }
 libc = "0.2.161"
-spin = { version = "0.9.8", default-features = false, features = ["lock_api", "mutex", "rwlock", "spin_mutex"] }
+spin = { version = "0.9.8", default-features = false, features = ["lock_api", "mutex", "rwlock", "spin_mutex", "once"] }
 
 # cranelift dependencies
 hashbrown = { version = "0.15", default-features = false, features = [
@@ -46,6 +45,9 @@ anyhow = "1.0.91"
 wast = { version = "219.0.1", features = ["dwarf"] }
 criterion = "0.5.1"
 capstone = { version = "0.12.0", default-features = false, features = ["full"] }
+
+[build-dependencies]
+bindgen = "0.70.1"
 
 [profile.release]
 opt-level = 3

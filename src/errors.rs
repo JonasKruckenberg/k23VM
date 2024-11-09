@@ -1,3 +1,4 @@
+use crate::trap::Trap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
@@ -26,8 +27,8 @@ pub enum Error {
     Gimli(gimli::Error),
     /// Failed to parse a wat file.
     Wat(wat::Error),
-    // /// A WebAssembly trap ocurred.
-    // Trap { trap: Trap, message: String },
+    /// A WebAssembly trap ocurred.
+    Trap { trap: Trap, message: String },
 }
 
 impl fmt::Display for Error {
@@ -46,10 +47,10 @@ impl fmt::Display for Error {
                 f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
             }
             Error::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
-            // Error::Trap { trap, message, .. } => {
-            //     f.write_fmt(format_args!("{message}. Reason {trap}"))?;
-            //     Ok(())
-            // }
+            Error::Trap { trap, message, .. } => {
+                f.write_fmt(format_args!("{message}. Reason {trap}"))?;
+                Ok(())
+            }
         }
     }
 }

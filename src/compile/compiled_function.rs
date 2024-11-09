@@ -7,6 +7,7 @@ use cranelift_codegen::{
     ValueLabelsRanges,
 };
 use cranelift_entity::PrimaryMap;
+use crate::trap::Trap;
 
 #[derive(Debug)]
 pub struct CompiledFunction {
@@ -47,6 +48,14 @@ impl CompiledFunction {
             .relocs()
             .iter()
             .map(|r| Relocation::from_mach_reloc(r, &self.name_map))
+    }
+
+    /// Returns an iterator to the function's traps.
+    pub fn traps(&self) -> impl ExactSizeIterator<Item = TrapInfo> + use<'_> {
+        self.buffer.traps().iter().map(|trap| TrapInfo {
+            trap: Trap::from_trap_code(trap.code).expect("unexpected trap code"),
+            offset: trap.offset,
+        })
     }
 
     pub fn metadata(&self) -> &CompiledFunctionMetadata {
@@ -131,4 +140,12 @@ impl Relocation {
             offset,
         }
     }
+}
+
+/// Information about a trap in a compiled function.
+pub struct TrapInfo {
+    /// The offset relative to the function start of the trapping address.
+    pub offset: u32,
+    /// The trap code corresponding to the trapping instruction.
+    pub trap: Trap,
 }
