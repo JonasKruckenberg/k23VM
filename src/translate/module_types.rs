@@ -1,22 +1,12 @@
-//! Interning of types within WASM.
-//!
-//! WASM contains a lot of types, and many of them are repeated, especially in under the
-//! function-references or GC proposals (with gc types can even be recursive to this becomes
-//! even more important). Interning these types makes it possible to efficiently compare
-//! types.
-
-use crate::indices::{SharedOrModuleTypeIndex, ModuleInternedRecGroupIndex, ModuleInternedTypeIndex, TypeIndex};
-use crate::translate::{
-    TranslatedModule, WasmArrayType, WasmCompositeType, WasmCompositeTypeInner, WasmFieldType,
-    WasmFuncType, WasmHeapType, WasmHeapTypeInner, WasmRefType, WasmStorageType, WasmStructType,
-    WasmSubType, WasmValType,
-};
-use alloc::vec::Vec;
+use crate::indices::{ModuleInternedRecGroupIndex, ModuleInternedTypeIndex};
+use crate::translate::type_convert::WasmparserTypeConverter;
+use crate::translate::types::WasmSubType;
+use crate::translate::TranslatedModule;
 use core::fmt;
 use core::ops::Range;
 use cranelift_entity::{EntityRef, PrimaryMap};
 use hashbrown::HashMap;
-use wasmparser::{UnpackedIndex, Validator, ValidatorId};
+use wasmparser::{Validator, ValidatorId};
 
 /// Types defined within a single WebAssembly module.
 #[derive(Debug, Default)]
@@ -26,7 +16,7 @@ pub struct ModuleTypes {
     /// Recursion groups defined within this module (only used when the GC proposal is enabled).
     rec_groups: PrimaryMap<ModuleInternedRecGroupIndex, Range<ModuleInternedTypeIndex>>,
     /// Types that have already been interned.
-    wasmparser2k23: HashMap<wasmparser::types::CoreTypeId, ModuleInternedTypeIndex>,
+    pub(super) seen_types: HashMap<wasmparser::types::CoreTypeId, ModuleInternedTypeIndex>,
 }
 
 impl fmt::Display for ModuleTypes {
@@ -63,6 +53,10 @@ impl ModuleTypes {
     ) -> impl ExactSizeIterator<Item = ModuleInternedTypeIndex> {
         let range = &self.rec_groups[rec_group];
         (range.start.as_u32()..range.end.as_u32()).map(|i| ModuleInternedTypeIndex::from_u32(i))
+    }
+
+    pub fn rec_groups(&self) -> impl ExactSizeIterator<Item = &'_ Range<ModuleInternedTypeIndex>> {
+        self.rec_groups.values()
     }
 }
 
@@ -161,7 +155,7 @@ impl ModuleTypesBuilder {
                 validator_types[wasmparser_id]
             );
 
-            let old_entry = self.types.wasmparser2k23.insert(wasmparser_id, interned);
+            let old_entry = self.types.seen_types.insert(wasmparser_id, interned);
             debug_assert_eq!(
                 old_entry, None,
                 "should not have already inserted {wasmparser_id:?}"
@@ -214,7 +208,7 @@ impl ModuleTypesBuilder {
 
         let module_interned_index = self.push_type(ty);
         debug_assert_eq!(
-            self.types.wasmparser2k23.get(&id),
+            self.types.seen_types.get(&id),
             Some(&module_interned_index),
             "should have reserved the right module-interned index for this wasmparser type already"
         );
@@ -241,202 +235,5 @@ impl ModuleTypesBuilder {
     /// Adds a new type to this interned list of types.
     fn push_type(&mut self, wasm_sub_type: WasmSubType) -> ModuleInternedTypeIndex {
         self.types.wasm_types.push(wasm_sub_type)
-    }
-}
-
-/// A type that knows how to convert from `wasmparser` types to types in this crate.
-pub struct WasmparserTypeConverter<'a> {
-    types: &'a ModuleTypes,
-    module: &'a TranslatedModule,
-}
-
-impl<'a> WasmparserTypeConverter<'a> {
-    pub fn new(types: &'a ModuleTypes, module: &'a TranslatedModule) -> Self {
-        Self { types, module }
-    }
-
-    pub fn convert_val_type(&self, ty: &wasmparser::ValType) -> WasmValType {
-        use wasmparser::ValType;
-        match ty {
-            ValType::I32 => WasmValType::I32,
-            ValType::I64 => WasmValType::I64,
-            ValType::F32 => WasmValType::F32,
-            ValType::F64 => WasmValType::F64,
-            ValType::V128 => WasmValType::V128,
-            ValType::Ref(ty) => WasmValType::Ref(self.convert_ref_type(ty)),
-        }
-    }
-
-    pub fn convert_ref_type(&self, ty: &wasmparser::RefType) -> WasmRefType {
-        WasmRefType {
-            nullable: ty.is_nullable(),
-            heap_type: self.convert_heap_type(&ty.heap_type()),
-        }
-    }
-
-    pub fn convert_heap_type(&self, ty: &wasmparser::HeapType) -> WasmHeapType {
-        match ty {
-            wasmparser::HeapType::Concrete(index) => self.lookup_heap_type(*index),
-            wasmparser::HeapType::Abstract { shared, ty } => {
-                use wasmparser::AbstractHeapType;
-                use WasmHeapTypeInner::*;
-                let ty = match ty {
-                    AbstractHeapType::Func => Func,
-                    AbstractHeapType::Extern => Extern,
-                    AbstractHeapType::Any => Any,
-                    AbstractHeapType::None => None,
-                    AbstractHeapType::NoExtern => NoExtern,
-                    AbstractHeapType::NoFunc => NoFunc,
-                    AbstractHeapType::Eq => Eq,
-                    AbstractHeapType::Struct => Struct,
-                    AbstractHeapType::Array => Array,
-                    AbstractHeapType::I31 => I31,
-                    AbstractHeapType::Exn => Exn,
-                    AbstractHeapType::NoExn => NoExn,
-                    AbstractHeapType::Cont => Cont,
-                    AbstractHeapType::NoCont => NoCont,
-                };
-
-                WasmHeapType {
-                    shared: *shared,
-                    ty,
-                }
-            }
-        }
-    }
-
-    pub fn convert_sub_type(&self, ty: &wasmparser::SubType) -> WasmSubType {
-        WasmSubType {
-            is_final: ty.is_final,
-            supertype: ty
-                .supertype_idx
-                .map(|index| SharedOrModuleTypeIndex::Module(self.lookup_type_index(index.unpack()))),
-            composite_type: self.convert_composite_type(&ty.composite_type),
-        }
-    }
-
-    pub fn convert_composite_type(&self, ty: &wasmparser::CompositeType) -> WasmCompositeType {
-        use wasmparser::CompositeInnerType;
-        match &ty.inner {
-            CompositeInnerType::Func(func) => {
-                WasmCompositeType::new_func(ty.shared, self.convert_func_type(func))
-            }
-            CompositeInnerType::Array(array) => {
-                WasmCompositeType::new_array(ty.shared, self.convert_array_type(array))
-            }
-            CompositeInnerType::Struct(strct) => {
-                WasmCompositeType::new_struct(ty.shared, self.convert_struct_type(strct))
-            }
-            CompositeInnerType::Cont(_) => todo!(),
-        }
-    }
-
-    pub fn convert_func_type(&self, ty: &wasmparser::FuncType) -> WasmFuncType {
-        let mut params = Vec::with_capacity(ty.params().len());
-        let mut results = Vec::with_capacity(ty.results().len());
-
-        for param in ty.params() {
-            params.push(self.convert_val_type(param));
-        }
-
-        for result in ty.results() {
-            results.push(self.convert_val_type(result));
-        }
-
-        WasmFuncType {
-            params: params.into_boxed_slice(),
-            results: results.into_boxed_slice(),
-        }
-    }
-
-    pub fn convert_array_type(&self, ty: &wasmparser::ArrayType) -> WasmArrayType {
-        WasmArrayType(self.convert_field_type(&ty.0))
-    }
-
-    pub fn convert_struct_type(&self, ty: &wasmparser::StructType) -> WasmStructType {
-        let fields: Vec<_> = ty
-            .fields
-            .iter()
-            .map(|ty| self.convert_field_type(ty))
-            .collect();
-        WasmStructType {
-            fields: fields.into_boxed_slice(),
-        }
-    }
-
-    pub fn convert_field_type(&self, ty: &wasmparser::FieldType) -> WasmFieldType {
-        WasmFieldType {
-            mutable: ty.mutable,
-            element_type: self.convert_storage_type(&ty.element_type),
-        }
-    }
-
-    pub fn convert_storage_type(&self, ty: &wasmparser::StorageType) -> WasmStorageType {
-        use wasmparser::StorageType;
-        match ty {
-            StorageType::I8 => WasmStorageType::I8,
-            StorageType::I16 => WasmStorageType::I16,
-            StorageType::Val(ty) => WasmStorageType::Val(self.convert_val_type(ty)),
-        }
-    }
-
-    fn lookup_type_index(&self, index: UnpackedIndex) -> ModuleInternedTypeIndex {
-        match index {
-            UnpackedIndex::Module(index) => {
-                let module_index = TypeIndex::from_u32(index);
-                self.module.types[module_index]
-            }
-            UnpackedIndex::Id(id) => self.types.wasmparser2k23[&id],
-            UnpackedIndex::RecGroup(_) => unreachable!(),
-        }
-    }
-
-    fn lookup_heap_type(&self, index: UnpackedIndex) -> WasmHeapType {
-        match index {
-            UnpackedIndex::Module(module_index) => {
-                let module_index = TypeIndex::from_u32(module_index);
-                let index = self.module.types[module_index];
-                if let Some(ty) = self.types.get_wasm_type(index) {
-                    match ty.composite_type.inner {
-                        WasmCompositeTypeInner::Func(_) => WasmHeapType::new(
-                            ty.composite_type.shared,
-                            WasmHeapTypeInner::ConcreteFunc(SharedOrModuleTypeIndex::Module(index)),
-                        ),
-                        WasmCompositeTypeInner::Array(_) => WasmHeapType::new(
-                            ty.composite_type.shared,
-                            WasmHeapTypeInner::ConcreteArray(SharedOrModuleTypeIndex::Module(index)),
-                        ),
-                        WasmCompositeTypeInner::Struct(_) => WasmHeapType::new(
-                            ty.composite_type.shared,
-                            WasmHeapTypeInner::ConcreteStruct(SharedOrModuleTypeIndex::Module(index)),
-                        ),
-                    }
-                } else {
-                    todo!()
-                }
-            }
-            UnpackedIndex::Id(id) => {
-                let index = self.types.wasmparser2k23[&id];
-                if let Some(ty) = self.types.get_wasm_type(index) {
-                    match ty.composite_type.inner {
-                        WasmCompositeTypeInner::Func(_) => WasmHeapType::new(
-                            ty.composite_type.shared,
-                            WasmHeapTypeInner::ConcreteFunc(SharedOrModuleTypeIndex::Module(index)),
-                        ),
-                        WasmCompositeTypeInner::Array(_) => WasmHeapType::new(
-                            ty.composite_type.shared,
-                            WasmHeapTypeInner::ConcreteArray(SharedOrModuleTypeIndex::Module(index)),
-                        ),
-                        WasmCompositeTypeInner::Struct(_) => WasmHeapType::new(
-                            ty.composite_type.shared,
-                            WasmHeapTypeInner::ConcreteStruct(SharedOrModuleTypeIndex::Module(index)),
-                        ),
-                    }
-                } else {
-                    todo!()
-                }
-            }
-            UnpackedIndex::RecGroup(_) => unreachable!(),
-        }
     }
 }

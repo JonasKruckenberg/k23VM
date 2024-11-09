@@ -1,7 +1,7 @@
 mod const_expr;
-mod module_strings;
 mod module_translator;
 mod module_types;
+mod type_convert;
 mod types;
 
 use crate::errors::SizeOverflow;
@@ -10,10 +10,11 @@ use crate::indices::{
     ElemIndex, EntityIndex, FieldIndex, FuncIndex, FuncRefIndex, GlobalIndex, LabelIndex,
     LocalIndex, MemoryIndex, ModuleInternedTypeIndex, TableIndex, TagIndex, TypeIndex,
 };
+use crate::translate::types::EntityType;
 use crate::{DEFAULT_OFFSET_GUARD_SIZE, WASM32_MAX_SIZE};
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
-use core::ops::Range;
 use cranelift_entity::packed_option::ReservedValue;
 use cranelift_entity::{EntitySet, PrimaryMap};
 use hashbrown::HashMap;
@@ -21,12 +22,16 @@ use wasmparser::collections::IndexMap;
 use wasmparser::WasmFeatures;
 
 pub use const_expr::{ConstExpr, ConstOp};
-pub use module_strings::ModuleInternedStr;
-pub use module_types::{ModuleTypes, WasmparserTypeConverter};
-pub use types::*;
+pub use module_translator::ModuleTranslator;
+pub use module_types::ModuleTypes;
+pub use type_convert::WasmparserTypeConverter;
+pub use types::{
+    WasmFuncType, WasmHeapTopTypeInner, WasmHeapType, WasmHeapTypeInner, WasmRecGroup, WasmRefType,
+    WasmSubType, WasmValType,
+};
 
-#[derive(Debug, Default)]
-pub struct Translation<'data> {
+#[derive(Debug)]
+pub struct ModuleTranslation<'data> {
     /// The translated module.
     pub module: TranslatedModule,
     /// Information about the module's functions.
@@ -37,40 +42,36 @@ pub struct Translation<'data> {
     /// Later on this could be used to determine which compiler/runtime features to enable, but
     /// for now we just use it to assert compatibility.
     pub required_features: WasmFeatures,
-    /// List of data segments found in this module which should be concatenated
-    /// together for the final compiled artifact.
-    ///
-    /// These data segments, when concatenated, are indexed by the
-    /// `MemoryInitializer` type.
-    pub data: Vec<&'data [u8]>,
-    /// Total size of all data pushed onto `data` so far.
-    total_data: u32,
-    /// List of passive element segments found in this module which will get
-    /// concatenated for the final artifact.
-    ///
-    /// These are indexed by the `passive_memory_initializers` field of the translated module.
-    pub passive_data: Vec<&'data [u8]>,
-    /// Total size of all passive data pushed onto `passive_data` so far.
-    total_passive_data: u32,
+}
+
+impl Default for ModuleTranslation<'_> {
+    fn default() -> Self {
+        Self {
+            module: TranslatedModule::default(),
+            function_bodies: PrimaryMap::default(),
+            debug_info: DebugInfo::default(),
+            required_features: WasmFeatures::empty(),
+        }
+    }
 }
 
 /// A translated WebAssembly module.
 #[derive(Debug, Default)]
 pub struct TranslatedModule {
     /// The name of this wasm module, if found,
-    pub name: Option<ModuleInternedStr>,
+    pub name: Option<String>,
     /// The types declared in this module.
     pub types: PrimaryMap<TypeIndex, ModuleInternedTypeIndex>,
 
     /// The functions declared in this module. Note that this only contains the
     /// function's signature index, not the actual function body. For that, see `Translation.function_bodies`.
-    pub functions: PrimaryMap<FuncIndex, FunctionType>,
+    pub functions: PrimaryMap<FuncIndex, FunctionDesc>,
     /// The tables declared in this module.
-    pub table_plans: PrimaryMap<TableIndex, TablePlan>,
+    pub tables: PrimaryMap<TableIndex, TableDesc>,
     /// The memories declared in this module.
-    pub memory_plans: PrimaryMap<MemoryIndex, MemoryPlan>,
+    pub memories: PrimaryMap<MemoryIndex, MemoryDesc>,
     /// The globals declared in this module.
-    pub globals: PrimaryMap<GlobalIndex, GlobalType>,
+    pub globals: PrimaryMap<GlobalIndex, GlobalDesc>,
 
     /// The index of the start function if defined.
     /// This function will be called during module initialization.
@@ -78,7 +79,7 @@ pub struct TranslatedModule {
     /// Imports declared in this module.
     pub imports: Vec<Import>,
     /// Exports declared in this module.
-    pub exports: IndexMap<ModuleInternedStr, EntityIndex>,
+    pub exports: IndexMap<String, EntityIndex>,
 
     /// Initialization expressions for globals defined in this module.
     pub global_initializers: PrimaryMap<DefinedGlobalIndex, ConstExpr>,
@@ -90,7 +91,7 @@ pub struct TranslatedModule {
     /// Passive table initializers that can be access by `table.init` instructions.
     pub passive_table_initializers: HashMap<ElemIndex, TableSegmentElements>,
     /// Passive memory initializers that can be access by `memory.init` instructions.
-    pub passive_memory_initializers: HashMap<DataIndex, Range<u32>>,
+    pub passive_memory_initializers: HashMap<DataIndex, Vec<u8>>,
     /// `ElemIndex`es of active table initializers that should be treated as "dropped" at runtime.
     pub active_table_initializers: EntitySet<ElemIndex>,
     /// `DataIndex`es of active memory initializers that should be treated as "dropped" at runtime.
@@ -201,10 +202,10 @@ impl TranslatedModule {
         self.num_imported_globals
     }
     pub fn num_defined_tables(&self) -> u32 {
-        u32::try_from(self.table_plans.len()).unwrap() - self.num_imported_tables
+        u32::try_from(self.tables.len()).unwrap() - self.num_imported_tables
     }
     pub fn num_defined_memories(&self) -> u32 {
-        u32::try_from(self.memory_plans.len()).unwrap() - self.num_imported_memories
+        u32::try_from(self.memories.len()).unwrap() - self.num_imported_memories
     }
     pub fn num_defined_globals(&self) -> u32 {
         u32::try_from(self.globals.len()).unwrap() - self.num_imported_globals
@@ -221,7 +222,7 @@ pub struct FunctionBodyData<'data> {
 }
 
 #[derive(Debug)]
-pub struct FunctionType {
+pub struct FunctionDesc {
     /// The index of the function signature in the type section.
     pub signature: TypeIndex,
     /// And index identifying this function "to the outside world"
@@ -229,14 +230,14 @@ pub struct FunctionType {
     pub func_ref: FuncRefIndex,
 }
 
-impl FunctionType {
+impl FunctionDesc {
     pub fn is_escaping(&self) -> bool {
         !self.func_ref.is_reserved_value()
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TablePlan {
+pub struct TableDesc {
     /// The table's element type.
     pub element_type: WasmRefType,
     /// Whether this is a 64-bit table.
@@ -259,9 +260,12 @@ pub struct TablePlan {
     pub shared: bool,
 }
 
-impl TablePlan {
+impl TableDesc {
     /// Creates a new `TablePlan` for the given `wasmparser::TableType`.
-    pub fn for_table(ty: wasmparser::TableType, type_convert: &WasmparserTypeConverter) -> Self {
+    pub fn from_wasmparser(
+        ty: wasmparser::TableType,
+        type_convert: &WasmparserTypeConverter,
+    ) -> Self {
         Self {
             element_type: type_convert.convert_ref_type(&ty.element_type),
             table64: ty.table64,
@@ -273,7 +277,7 @@ impl TablePlan {
 }
 
 #[derive(Debug, Clone)]
-pub struct MemoryPlan {
+pub struct MemoryDesc {
     /// The minimum size of this memory, in wasm pages.
     ///
     /// For 32-bit memories (when memory64 is false) this is guaranteed to be at most u32::MAX.
@@ -300,7 +304,7 @@ pub struct MemoryPlan {
     pub shared: bool,
 }
 
-impl MemoryPlan {
+impl MemoryDesc {
     /// WebAssembly page sizes are 64KiB by default.
     pub const DEFAULT_PAGE_SIZE: u32 = 0x10000;
 
@@ -312,7 +316,7 @@ impl MemoryPlan {
     };
 
     /// Creates a new `MemoryPlan` for the given `wasmparser::MemoryType`.
-    pub fn for_memory(ty: wasmparser::MemoryType) -> Self {
+    pub fn from_wasmparser(ty: wasmparser::MemoryType) -> Self {
         Self {
             minimum: ty.initial,
             maximum: ty.maximum,
@@ -394,13 +398,26 @@ impl MemoryPlan {
 }
 
 #[derive(Debug, Clone)]
-pub struct GlobalType {
+pub struct GlobalDesc {
     /// The type of value stored in this global.
     pub content_type: WasmValType,
     /// Whether this global is mutable.
     pub mutable: bool,
     /// Whether this global is shared, indicating that it should be send-able across threads.
     pub shared: bool,
+}
+
+impl GlobalDesc {
+    pub fn from_wasmparser(
+        ty: &wasmparser::GlobalType,
+        type_convert: &WasmparserTypeConverter,
+    ) -> Self {
+        Self {
+            content_type: type_convert.convert_val_type(&ty.content_type),
+            mutable: ty.mutable,
+            shared: ty.shared,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -445,16 +462,16 @@ pub struct MemoryInitializer {
     pub offset: ConstExpr,
     /// The data to fill the memory with.
     /// This is an index into the `Translation.data` array.
-    pub data: Range<u32>,
+    pub data: Vec<u8>,
 }
 
 /// A WebAssembly import.
 #[derive(Debug)]
 pub struct Import {
     /// The module or namespace being imported.
-    pub module: ModuleInternedStr,
+    pub module: String,
     /// The name of the item being imported.
-    pub name: ModuleInternedStr,
+    pub name: String,
     /// Where the imported entity will be placed, this also holds the type of the import.
     pub ty: EntityType,
 }
@@ -571,7 +588,7 @@ mod tests {
         let mut validator = Validator::new();
 
         let wasm = wat::parse_str(wat).unwrap();
-        let (translation, types, _) = ModuleTranslator::new(&mut validator)
+        let (translation, types) = ModuleTranslator::new(&mut validator)
             .translate(&wasm)
             .unwrap();
 
@@ -596,7 +613,7 @@ mod tests {
         let mut validator = Validator::new();
 
         let wasm = wat::parse_str(wat).unwrap();
-        let (_, types, _) = ModuleTranslator::new(&mut validator)
+        let (_, types) = ModuleTranslator::new(&mut validator)
             .translate(&wasm)
             .unwrap();
 

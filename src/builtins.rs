@@ -1,5 +1,6 @@
 use cranelift_entity::entity_impl;
 
+/// Iterate over all builtin functions and call the provided macro for each.
 #[macro_export]
 macro_rules! foreach_builtin_function {
     ($mac:ident) => {

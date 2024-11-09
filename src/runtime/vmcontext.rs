@@ -1,4 +1,4 @@
-use crate::indices::TypeIndex;
+use crate::indices::VMSharedTypeIndex;
 use core::ffi::c_void;
 use core::fmt;
 use core::marker::PhantomPinned;
@@ -244,15 +244,13 @@ pub struct VMFunctionBody(u8);
 pub struct VMFuncRef {
     /// Function pointer for this funcref if being called via the "array"
     /// calling convention that `Func::new` et al use.
-    pub host_call: VMArrayCallFunction,
+    pub array_call: VMArrayCallFunction,
     /// Function pointer for this funcref if being called via the calling
     /// convention we use when compiling Wasm.
     pub wasm_call: NonNull<VMWasmCallFunction>,
-    // /// Function signature's type id.
-    // pub type_index: VMSharedTypeIndex,
     /// The VM state associated with this function.
     pub vmctx: *mut VMOpaqueContext,
-    pub type_index: TypeIndex,
+    pub type_index: VMSharedTypeIndex,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -262,7 +260,7 @@ pub struct VMFunctionImport {
     pub wasm_call: NonNull<VMWasmCallFunction>,
     /// Function pointer to use when calling this imported function with the
     /// "array" calling convention that `Func::new` et al use.
-    pub host_call: VMArrayCallFunction,
+    pub array_call: VMArrayCallFunction,
     /// The VM state associated with this function.
     ///
     /// For Wasm functions defined by core wasm instances this will be `*mut

@@ -1,8 +1,18 @@
-use crate::indices::{DataIndex, ElemIndex, EntityIndex, FieldIndex, FuncIndex, FuncRefIndex, GlobalIndex, LabelIndex, LocalIndex, MemoryIndex, SharedOrModuleTypeIndex, TableIndex, TagIndex, TypeIndex};
-use crate::translate::module_strings::{ModuleStrings};
-use crate::translate::module_types::{ModuleTypes, ModuleTypesBuilder, WasmparserTypeConverter};
-use crate::translate::{ConstExpr, EntityType, FunctionBodyData, FunctionType, GlobalType, Import, MemoryInitializer, MemoryPlan, ProducersLanguage, ProducersLanguageField, ProducersSdk, ProducersSdkField, ProducersTool, ProducersToolField, TableInitialValue, TablePlan, TableSegment, TableSegmentElements, Translation};
+use crate::indices::{
+    CanonicalizedTypeIndex, DataIndex, ElemIndex, EntityIndex, FieldIndex, FuncIndex, FuncRefIndex,
+    GlobalIndex, LabelIndex, LocalIndex, MemoryIndex, TableIndex, TagIndex, TypeIndex,
+};
+use crate::translate::module_types::{ModuleTypes, ModuleTypesBuilder};
+use crate::translate::type_convert::WasmparserTypeConverter;
+use crate::translate::types::EntityType;
+use crate::translate::{
+    ConstExpr, FunctionBodyData, FunctionDesc, GlobalDesc, Import, MemoryDesc, MemoryInitializer,
+    ModuleTranslation, ProducersLanguage, ProducersLanguageField, ProducersSdk, ProducersSdkField,
+    ProducersTool, ProducersToolField, TableDesc, TableInitialValue, TableSegment,
+    TableSegmentElements,
+};
 use crate::wasm_unsupported;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use cranelift_entity::packed_option::ReservedValue;
@@ -17,19 +27,17 @@ use wasmparser::{
 
 /// A WebAssembly module translator.
 pub struct ModuleTranslator<'a, 'data> {
-    result: Translation<'data>,
+    result: ModuleTranslation<'data>,
     validator: &'a mut Validator,
     types: ModuleTypesBuilder,
-    strings: ModuleStrings,
 }
 
 impl<'a, 'data> ModuleTranslator<'a, 'data> {
     pub fn new(validator: &'a mut Validator) -> Self {
         Self {
-            strings: ModuleStrings::with_capacity(16),
             types: ModuleTypesBuilder::new(validator),
             validator,
-            result: Translation::default(),
+            result: ModuleTranslation::default(),
         }
     }
 
@@ -39,7 +47,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     pub fn translate(
         mut self,
         data: &'data [u8],
-    ) -> crate::Result<(Translation<'data>, ModuleTypes, ModuleStrings)> {
+    ) -> crate::Result<(ModuleTranslation<'data>, ModuleTypes)> {
         let mut parser = Parser::default();
         parser.set_features(*self.validator.features());
 
@@ -48,7 +56,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         }
 
         self.validator.reset();
-        Ok((self.result, self.types.finish(), self.strings))
+        Ok((self.result, self.types.finish()))
     }
 
     /// Translates a single payload (essentially a section) of a WASM module.
@@ -233,10 +241,12 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                 TypeRef::Func(index) => {
                     let signature = TypeIndex::from_u32(index);
                     let interned_index = self.result.module.types[signature];
+                    self.result.module.functions.push(FunctionDesc {
+                        signature,
+                        func_ref: FuncRefIndex::reserved_value(),
+                    });
                     self.result.module.num_imported_functions += 1;
-                    EntityType::Function(SharedOrModuleTypeIndex::Module(
-                        interned_index,
-                    ))
+                    EntityType::Function(CanonicalizedTypeIndex::Module(interned_index))
                 }
                 TypeRef::Table(ty) => {
                     self.result.module.num_imported_tables += 1;
@@ -244,11 +254,15 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     let ty_convert =
                         WasmparserTypeConverter::new(&self.types.types, &self.result.module);
 
-                    EntityType::Table(TablePlan::for_table(ty, &ty_convert))
+                    let table = TableDesc::from_wasmparser(ty, &ty_convert);
+                    self.result.module.tables.push(table.clone());
+                    EntityType::Table(table)
                 }
                 TypeRef::Memory(ty) => {
                     self.result.module.num_imported_memories += 1;
-                    EntityType::Memory(MemoryPlan::for_memory(ty))
+                    let memory = MemoryDesc::from_wasmparser(ty);
+                    self.result.module.memories.push(memory.clone());
+                    EntityType::Memory(memory)
                 }
                 TypeRef::Global(ty) => {
                     self.result.module.num_imported_globals += 1;
@@ -256,11 +270,13 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     let ty_convert =
                         WasmparserTypeConverter::new(&self.types.types, &self.result.module);
 
-                    EntityType::Global(GlobalType {
+                    let global = GlobalDesc {
                         content_type: ty_convert.convert_val_type(&ty.content_type),
                         mutable: ty.mutable,
                         shared: ty.shared,
-                    })
+                    };
+                    self.result.module.globals.push(global.clone());
+                    EntityType::Global(global)
                 }
 
                 // doesn't get past validation
@@ -268,8 +284,8 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             };
 
             self.result.module.imports.push(Import {
-                module: self.strings.intern(import.module),
-                name: self.strings.intern(import.module),
+                module: import.module.to_string(),
+                name: import.module.to_string(),
                 ty: index,
             });
         }
@@ -288,7 +304,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
         for index in functions {
             let signature = TypeIndex::from_u32(index?);
-            self.result.module.functions.push(FunctionType {
+            self.result.module.functions.push(FunctionDesc {
                 signature,
                 func_ref: FuncRefIndex::reserved_value(),
             });
@@ -300,7 +316,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     fn translate_table_section(&mut self, tables: TableSectionReader<'data>) -> crate::Result<()> {
         self.result
             .module
-            .table_plans
+            .tables
             .reserve_exact(tables.count() as usize);
         self.result
             .module
@@ -313,8 +329,8 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
             let ty_convert = WasmparserTypeConverter::new(&self.types.types, &self.result.module);
 
-            let plan = TablePlan::for_table(table.ty, &ty_convert);
-            self.result.module.table_plans.push(plan);
+            let plan = TableDesc::from_wasmparser(table.ty, &ty_convert);
+            self.result.module.tables.push(plan);
 
             let init = match table.init {
                 TableInit::RefNull => TableInitialValue::RefNull,
@@ -342,14 +358,14 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     ) -> crate::Result<()> {
         self.result
             .module
-            .memory_plans
+            .memories
             .reserve_exact(memories.count() as usize);
 
         for ty in memories {
             self.result
                 .module
-                .memory_plans
-                .push(MemoryPlan::for_memory(ty?));
+                .memories
+                .push(MemoryDesc::from_wasmparser(ty?));
         }
 
         Ok(())
@@ -377,7 +393,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
             let ty_convert = WasmparserTypeConverter::new(&self.types.types, &self.result.module);
 
-            self.result.module.globals.push(GlobalType {
+            self.result.module.globals.push(GlobalDesc {
                 content_type: ty_convert.convert_val_type(&global.ty.content_type),
                 mutable: global.ty.mutable,
                 shared: global.ty.shared,
@@ -451,7 +467,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             self.result
                 .module
                 .exports
-                .insert(self.strings.intern(export.name), index);
+                .insert(export.name.to_string(), index);
         }
 
         Ok(())
@@ -528,21 +544,6 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             let entry = entry?;
             let data_index = DataIndex::from_u32(data_index as u32);
 
-            let mk_range = |total: &mut u32| -> crate::Result<_> {
-                let range = u32::try_from(entry.data.len())
-                    .ok()
-                    .and_then(|size| {
-                        let start = *total;
-                        let end = start.checked_add(size)?;
-                        Some(start..end)
-                    })
-                    .ok_or_else(|| {
-                        wasm_unsupported!("more than 4 gigabytes of data in wasm module")
-                    })?;
-                *total += range.end - range.start;
-                Ok(range)
-            };
-
             match entry.kind {
                 DataKind::Active {
                     memory_index,
@@ -552,29 +553,24 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     let (offset, escaped) = ConstExpr::from_wasmparser(offset_expr)?;
                     debug_assert!(escaped.is_empty());
 
-                    let range = mk_range(&mut self.result.total_data)?;
-
                     self.result
                         .module
                         .memory_initializers
                         .push(MemoryInitializer {
                             memory_index,
                             offset,
-                            data: range,
+                            data: entry.data.to_vec(),
                         });
-                    self.result.data.push(entry.data.into());
                     self.result
                         .module
                         .active_memory_initializers
                         .insert(data_index);
                 }
                 DataKind::Passive => {
-                    let range = mk_range(&mut self.result.total_passive_data)?;
-                    self.result.passive_data.push(entry.data.into());
                     self.result
                         .module
                         .passive_memory_initializers
-                        .insert(data_index, range);
+                        .insert(data_index, entry.data.to_vec());
                 }
             }
         }
@@ -667,7 +663,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
             match subsection? {
                 Name::Module { name, .. } => {
-                    self.result.module.name = Some(self.strings.intern(name));
+                    self.result.module.name = Some(name.to_string());
                 }
                 Name::Function(names) => {
                     for_each_direct_name(names, |idx, name| {
@@ -933,25 +929,5 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         dwarf.locations = gimli::LocationLists::new(info.debug_loc, info.debug_loclists);
 
         info.dwarf = dwarf;
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    #[test]
-    fn strings() {
-        let long = "iufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisfiufgliufglisfliasflisaufisufufsdizfizaswfizfsaizfizsfilzfisf";
-        let (strings, a, b, c) = {
-            let mut builder = ModuleStrings::with_capacity(2);
-            let a = builder.intern("hello");
-            let c = builder.intern(long);
-            let b = builder.intern("world");
-            (builder, a, b, c)
-        };
-
-        assert_eq!(&strings[a], "hello");
-        assert_eq!(&strings[c], long);
-        assert_eq!(&strings[b], "world");
     }
 }

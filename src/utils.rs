@@ -66,7 +66,7 @@ pub fn value_type(ty: &WasmValType, pointer_type: ir::Type) -> ir::Type {
 pub fn reference_type(wasm_ht: &WasmHeapType, pointer_type: ir::Type) -> ir::Type {
     match wasm_ht.top().inner {
         WasmHeapTopTypeInner::Func => pointer_type,
-        WasmHeapTopTypeInner::Any | WasmHeapTopTypeInner::Extern => todo!(),
+        WasmHeapTopTypeInner::Any | WasmHeapTopTypeInner::Extern => ir::types::I32,
         WasmHeapTopTypeInner::Exn => todo!(),
         WasmHeapTopTypeInner::Cont => todo!(),
     }

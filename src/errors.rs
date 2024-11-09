@@ -1,4 +1,3 @@
-use crate::Trap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
@@ -7,7 +6,7 @@ use cranelift_codegen::CodegenError;
 /// Convenience macro for creating an `Error::Unsupported` variant.
 #[macro_export]
 macro_rules! wasm_unsupported {
-    ($($arg:tt)*) => { $crate::Error::Unsupported(alloc::format!($($arg)*)) }
+    ($($arg:tt)*) => { $crate::Error::Unsupported(::alloc::format!($($arg)*)) }
 }
 
 #[derive(Debug)]
@@ -27,12 +26,8 @@ pub enum Error {
     Gimli(gimli::Error),
     /// Failed to parse a wat file.
     Wat(wat::Error),
-    /// Failed to write an object file.
-    ObjectWrite(String),
-    /// Failed to read an object file.
-    ObjectRead,
-    /// A WebAssembly trap ocurred.
-    Trap { trap: Trap, message: String },
+    // /// A WebAssembly trap ocurred.
+    // Trap { trap: Trap, message: String },
 }
 
 impl fmt::Display for Error {
@@ -51,12 +46,10 @@ impl fmt::Display for Error {
                 f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
             }
             Error::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
-            Error::ObjectWrite(e) => f.write_fmt(format_args!("Failed to write object file: {e}")),
-            Error::ObjectRead => f.write_str("Failed to read object file"),
-            Error::Trap { trap, message, .. } => {
-                f.write_fmt(format_args!("{message}. Reason {trap}"))?;
-                Ok(())
-            }
+            // Error::Trap { trap, message, .. } => {
+            //     f.write_fmt(format_args!("{message}. Reason {trap}"))?;
+            //     Ok(())
+            // }
         }
     }
 }
@@ -96,12 +89,6 @@ impl From<gimli::Error> for Error {
 impl From<wat::Error> for Error {
     fn from(value: wat::Error) -> Self {
         Self::Wat(value)
-    }
-}
-
-impl From<object::write::Error> for Error {
-    fn from(value: object::write::Error) -> Self {
-        Self::ObjectWrite(value.to_string())
     }
 }
 

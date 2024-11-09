@@ -1,8 +1,9 @@
 use crate::enum_accessors;
-use crate::indices::SharedOrModuleTypeIndex;
+use crate::indices::CanonicalizedTypeIndex;
+use crate::translate::{GlobalDesc, MemoryDesc, TableDesc};
+use crate::type_registry::TypeTrace;
 use alloc::boxed::Box;
 use core::fmt;
-use crate::translate::{GlobalType, MemoryPlan, TablePlan};
 
 /// Represents the types of values in a WebAssembly module.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -34,6 +35,30 @@ impl fmt::Display for WasmValType {
     }
 }
 
+impl TypeTrace for WasmValType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        if let Self::Ref(ref_type) = self {
+            ref_type.trace(func)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        if let Self::Ref(ref_type) = self {
+            ref_type.trace_mut(func)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct WasmRefType {
     pub nullable: bool,
@@ -49,6 +74,22 @@ impl WasmRefType {
         nullable: true,
         heap_type: WasmHeapType::new(false, WasmHeapTypeInner::Func),
     };
+
+    /// Is this a type that is represented as a `VMGcRef`?
+    #[inline]
+    pub fn is_vmgcref_type(&self) -> bool {
+        self.heap_type.is_vmgcref_type()
+    }
+
+    /// Is this a type that is represented as a `VMGcRef` and is additionally
+    /// not an `i31`?
+    ///
+    /// That is, is this a a type that actually refers to an object allocated in
+    /// a GC heap?
+    #[inline]
+    pub fn is_vmgcref_type_and_not_i31(&self) -> bool {
+        self.heap_type.is_vmgcref_type_and_not_i31()
+    }
 }
 
 impl fmt::Display for WasmRefType {
@@ -67,6 +108,22 @@ impl fmt::Display for WasmRefType {
     }
 }
 
+impl TypeTrace for WasmRefType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        self.heap_type.trace(func)
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        self.heap_type.trace_mut(func)
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct WasmHeapType {
     pub shared: bool,
@@ -77,6 +134,33 @@ impl WasmHeapType {
     pub(crate) const fn new(shared: bool, ty: WasmHeapTypeInner) -> Self {
         Self { shared, ty }
     }
+
+    /// Is this a type that is represented as a `VMGcRef`?
+    #[inline]
+    pub fn is_vmgcref_type(&self) -> bool {
+        match self.top().inner {
+            // All `t <: (ref null any)` and `t <: (ref null extern)` are
+            // represented as `VMGcRef`s.
+            WasmHeapTopTypeInner::Any | WasmHeapTopTypeInner::Extern => true,
+
+            // All others are not.
+            WasmHeapTopTypeInner::Func | WasmHeapTopTypeInner::Exn | WasmHeapTopTypeInner::Cont => {
+                false
+            }
+        }
+    }
+
+    /// Is this a type that is represented as a `VMGcRef` and is additionally
+    /// not an `i31`?
+    ///
+    /// That is, is this a a type that actually refers to an object allocated in
+    /// a GC heap?
+    #[inline]
+    pub fn is_vmgcref_type_and_not_i31(&self) -> bool {
+        self.is_vmgcref_type() && self.ty != WasmHeapTypeInner::I31
+    }
+
+    /// Get this types top type
     pub(crate) fn top(&self) -> WasmHeapTopType {
         let inner = match self.ty {
             WasmHeapTypeInner::Extern | WasmHeapTypeInner::NoExtern => WasmHeapTopTypeInner::Extern,
@@ -109,7 +193,7 @@ pub enum WasmHeapTypeInner {
 
     // Function types.
     Func,
-    ConcreteFunc(SharedOrModuleTypeIndex),
+    ConcreteFunc(CanonicalizedTypeIndex),
     NoFunc,
 
     // Internal types.
@@ -117,9 +201,9 @@ pub enum WasmHeapTypeInner {
     Eq,
     I31,
     Array,
-    ConcreteArray(SharedOrModuleTypeIndex),
+    ConcreteArray(CanonicalizedTypeIndex),
     Struct,
-    ConcreteStruct(SharedOrModuleTypeIndex),
+    ConcreteStruct(CanonicalizedTypeIndex),
     None,
 
     Exn,
@@ -156,6 +240,32 @@ impl fmt::Display for WasmHeapType {
     }
 }
 
+impl TypeTrace for WasmHeapType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        match self.ty {
+            WasmHeapTypeInner::ConcreteFunc(index)
+            | WasmHeapTypeInner::ConcreteArray(index)
+            | WasmHeapTypeInner::ConcreteStruct(index) => func(index),
+            _ => Ok(()),
+        }
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        match self.ty {
+            WasmHeapTypeInner::ConcreteFunc(ref mut index)
+            | WasmHeapTypeInner::ConcreteArray(ref mut index)
+            | WasmHeapTypeInner::ConcreteStruct(ref mut index) => func(index),
+            _ => Ok(()),
+        }
+    }
+}
+
 pub struct WasmHeapTopType {
     pub shared: bool,
     pub inner: WasmHeapTopTypeInner,
@@ -182,7 +292,7 @@ pub struct WasmSubType {
     pub is_final: bool,
 
     /// This type's supertype, if any.
-    pub supertype: Option<SharedOrModuleTypeIndex>,
+    pub supertype: Option<CanonicalizedTypeIndex>,
 
     /// The array, function, or struct that is defined.
     pub composite_type: WasmCompositeType,
@@ -249,6 +359,28 @@ impl fmt::Display for WasmSubType {
             }
             write!(f, " {})", self.composite_type)
         }
+    }
+}
+
+impl TypeTrace for WasmSubType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        if let Some(sup) = self.supertype {
+            func(sup)?;
+        }
+        self.composite_type.trace(func)
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        if let Some(sup) = self.supertype.as_mut() {
+            func(sup)?;
+        }
+        self.composite_type.trace_mut(func)
     }
 }
 
@@ -341,6 +473,30 @@ impl fmt::Display for WasmCompositeType {
     }
 }
 
+impl TypeTrace for WasmCompositeType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        match self.inner {
+            WasmCompositeTypeInner::Func(ref inner) => inner.trace(func),
+            WasmCompositeTypeInner::Array(ref inner) => inner.trace(func),
+            WasmCompositeTypeInner::Struct(ref inner) => inner.trace(func),
+        }
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        match self.inner {
+            WasmCompositeTypeInner::Func(ref mut inner) => inner.trace_mut(func),
+            WasmCompositeTypeInner::Array(ref mut inner) => inner.trace_mut(func),
+            WasmCompositeTypeInner::Struct(ref mut inner) => inner.trace_mut(func),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum WasmCompositeTypeInner {
     /// The type is a regular function.
@@ -390,6 +546,34 @@ impl fmt::Display for WasmFuncType {
     }
 }
 
+impl TypeTrace for WasmFuncType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        for ty in self.params.iter() {
+            ty.trace(func)?;
+        }
+        for ty in self.results.iter() {
+            ty.trace(func)?;
+        }
+        Ok(())
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        for ty in self.params.iter_mut() {
+            ty.trace_mut(func)?;
+        }
+        for ty in self.results.iter_mut() {
+            ty.trace_mut(func)?;
+        }
+        Ok(())
+    }
+}
+
 /// A WebAssembly GC-proposal Array type.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct WasmArrayType(pub WasmFieldType);
@@ -397,6 +581,22 @@ pub struct WasmArrayType(pub WasmFieldType);
 impl fmt::Display for WasmArrayType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(array {})", self.0)
+    }
+}
+
+impl TypeTrace for WasmArrayType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        self.0.trace(func)
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        self.0.trace_mut(func)
     }
 }
 
@@ -416,6 +616,28 @@ impl fmt::Display for WasmStructType {
     }
 }
 
+impl TypeTrace for WasmStructType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        for field in self.fields.iter() {
+            field.trace(func)?;
+        }
+        Ok(())
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        for field in self.fields.iter_mut() {
+            field.trace_mut(func)?;
+        }
+        Ok(())
+    }
+}
+
 /// The type of struct field or array element.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct WasmFieldType {
@@ -432,6 +654,22 @@ impl fmt::Display for WasmFieldType {
         } else {
             fmt::Display::fmt(&self.element_type, f)
         }
+    }
+}
+
+impl TypeTrace for WasmFieldType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        self.element_type.trace(func)
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        self.element_type.trace_mut(func)
     }
 }
 
@@ -456,10 +694,59 @@ impl fmt::Display for WasmStorageType {
     }
 }
 
+impl TypeTrace for WasmStorageType {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        if let Self::Val(val) = self {
+            val.trace(func)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        if let Self::Val(val) = self {
+            val.trace_mut(func)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EntityType {
-    Function(SharedOrModuleTypeIndex),
-    Table(TablePlan),
-    Memory(MemoryPlan),
-    Global(GlobalType),
+    Function(CanonicalizedTypeIndex),
+    Table(TableDesc),
+    Memory(MemoryDesc),
+    Global(GlobalDesc),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct WasmRecGroup(pub(crate) Box<[WasmSubType]>);
+
+impl TypeTrace for WasmRecGroup {
+    fn trace<F, E>(&self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        for ty in self.0.iter() {
+            ty.trace(func)?;
+        }
+        Ok(())
+    }
+
+    fn trace_mut<F, E>(&mut self, func: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
+    {
+        for ty in self.0.iter_mut() {
+            ty.trace_mut(func)?;
+        }
+        Ok(())
+    }
 }

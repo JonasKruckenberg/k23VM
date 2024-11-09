@@ -5,41 +5,47 @@ edition = "2021"
 authors = ["Jonas Kruckenberg <iterpre@protonmail.com>"]
 license = "MIT"
 
+[[bench]]
+name = "translation"
+harness = false
+
+[[bench]]
+name = "compilation"
+harness = false
+
 [dependencies]
+tracing = { version = "0.1.40", default-features = false, features = ["attributes", "log"] }
+#object = { version = "0.36.4", default-features = false, features = ["read_core", "write_core", "elf"] }
 gimli = { version = "0.31.0", default-features = false, features = ["read"] }
+onlyerror = { version = "0.1.4", default-features = false }
 smallvec = { version = "1.6.1", features = ["union"] }
+cfg-if = "1.0.0"
+
+rustix = { version = "0.38.37", default-features = false, features = ["mm"] }
+libc = "0.2.161"
+spin = { version = "0.9.8", default-features = false, features = ["lock_api", "mutex", "rwlock", "spin_mutex"] }
+
+# cranelift dependencies
 hashbrown = { version = "0.15", default-features = false, features = [
     "inline-more",
     "nightly",
-    "default-hasher"
+    "default-hasher",
+    "serde"
 ] }
-addr2line = { version = "0.24.2", default-features = false }
-rustc-demangle = { version = "0.1.24", default-features = false }
-tracing = { version = "0.1.40", default-features = false, features = ["attributes", "log"] }
-regalloc2 = "0.10.2"
-spin = { version = "0.9.8", default-features = false, features = ["lock_api", "mutex", "spin_mutex"] }
-object = { version = "0.36.4", default-features = false, features = ["read_core", "write_core", "elf"] }
-cfg-if = "1.0.0"
-
-# placeholder dependencies
-libc = "0.2.161"
-rustix = { version = "0.38.37", default-features = false, features = ["mm"] }
-
-# cranelift dependencies
-wasmparser = { version = "0.219", default-features = false, features = ["features", "validate", "component-model"] }
 wat = "1.219.1"
+wasmparser = { version = "0.219", default-features = false, features = ["features", "validate", "component-model"] }
 target-lexicon = { version = "0.12.14", default-features = false }
 cranelift-codegen = { version = "0.113.0", default-features = false, features = ["std", "host-arch"] }
 cranelift-frontend = { version = "0.113.0", default-features = false, features = ["std"] }
 cranelift-entity = { version = "0.113.0", default-features = false }
+wasmtime-slab = "26.0.1"
 
 [dev-dependencies]
 test-log = "0.2.16"
 anyhow = "1.0.91"
 wast = { version = "219.0.1", features = ["dwarf"] }
-
-[features]
-no_std = []
+criterion = "0.5.1"
+capstone = { version = "0.12.0", default-features = false, features = ["full"] }
 
 [profile.release]
 opt-level = 3
@@ -48,3 +54,9 @@ lto = true
 strip = true
 overflow-checks = true
 split-debuginfo = "packed"
+
+[profile.bench]
+debug = true
+
+[features]
+no_std = []
