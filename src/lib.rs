@@ -58,12 +58,12 @@ pub fn host_page_size() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::CompileInputs;
+    
     use crate::module::Module;
     use capstone::arch::arm64::ArchMode;
     use capstone::arch::BuildsCapstone;
     use capstone::Capstone;
-    use core::mem;
+    
     use wasmparser::Validator;
 
     #[test_log::test]

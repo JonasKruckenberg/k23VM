@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use k23_vm::{Engine, Module, ModuleTranslator};
+use k23_vm::{Engine, Module};
 use wasmparser::Validator;
 
 fn compile(bytes: &[u8]) {

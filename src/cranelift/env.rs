@@ -116,7 +116,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
 
     pub(crate) fn vmctx_val(&mut self, pos: &mut FuncCursor<'_>) -> ir::Value {
         let pointer_type = self.pointer_type();
-        let vmctx = self.vmctx(&mut pos.func);
+        let vmctx = self.vmctx(pos.func);
         pos.ins().global_value(pointer_type, vmctx)
     }
 
@@ -214,7 +214,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
     }
 }
 
-impl<'module_env> TranslationEnvironment<'module_env> {
+impl TranslationEnvironment<'_> {
     pub fn make_direct_func(
         &self,
         func: &mut Function,
@@ -467,7 +467,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
     /// Returns a pair of the CLIF reference type to use and a boolean that
     /// describes whether the value should be included in GC stack maps or not.
     pub fn reference_type(&self, hty: &WasmHeapType) -> (Type, bool) {
-        let ty = reference_type(&hty, self.pointer_type());
+        let ty = reference_type(hty, self.pointer_type());
         let needs_stack_map = match hty.top().inner {
             WasmHeapTopTypeInner::Extern | WasmHeapTopTypeInner::Any => true,
             WasmHeapTopTypeInner::Func => false,

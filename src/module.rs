@@ -44,9 +44,9 @@ impl Module {
 
         let unlinked_outputs = inputs.compile(engine.compiler())?;
         let (code, function_info) =
-            unlinked_outputs.link_and_finish(&engine, &translation.module)?;
+            unlinked_outputs.link_and_finish(engine, &translation.module)?;
 
-        let type_collection = engine.type_registry().register_module_types(&engine, types);
+        let type_collection = engine.type_registry().register_module_types(engine, types);
 
         tracing::trace!("Allocating new memory map for compiled module...");
         let vec = MmapVec::from_slice(&code)?;

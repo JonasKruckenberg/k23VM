@@ -594,7 +594,7 @@ mod tests {
 
         let wasm_types = types.wasm_types().collect::<Vec<_>>();
         assert_eq!(wasm_types.len(), 1);
-        assert_eq!(wasm_types[0].1.is_func(), true);
+        assert!(wasm_types[0].1.is_func());
         let f = wasm_types[0].1.unwrap_func();
         assert_eq!(f.params.len(), 1);
         assert_eq!(f.results.len(), 1);

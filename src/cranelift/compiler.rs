@@ -102,8 +102,7 @@ impl Compiler for CraneliftCompiler {
         let vmctx = context.func.create_global_value(GlobalValueData::VMContext);
         let stack_limit = context.func.create_global_value(GlobalValueData::Load {
             base: vmctx,
-            offset: i32::try_from(self.offsets.vmctx_stack_limit())
-                .unwrap()
+            offset: i32::from(self.offsets.vmctx_stack_limit())
                 .into(),
             global_type: isa.pointer_type(),
             flags: MemFlags::trusted(),
@@ -175,7 +174,7 @@ impl Compiler for CraneliftCompiler {
             MemFlags::trusted(),
             fp,
             vmctx,
-            i32::try_from(self.offsets.vmctx_last_wasm_entry_fp()).unwrap(),
+            i32::from(self.offsets.vmctx_last_wasm_entry_fp()),
         );
 
         // Then call the Wasm function with those arguments.
@@ -255,7 +254,7 @@ impl Compiler for CraneliftCompiler {
             pointer_type,
             mem_flags,
             vmctx,
-            i32::try_from(self.offsets.vmctx_builtin_functions()).unwrap(),
+            i32::from(self.offsets.vmctx_builtin_functions()),
         );
         let body_offset = i32::try_from(index.as_u32() * pointer_type.bytes()).unwrap();
         let func_addr = builder
@@ -439,7 +438,7 @@ fn allocate_stack_array_and_spill_args(
     {
         let values_vec_len = builder
             .ins()
-            .iconst(ir::types::I32, i64::try_from(values_vec_len).unwrap());
+            .iconst(ir::types::I32, i64::from(values_vec_len));
         store_values_to_array(builder, &ty.params, args, values_vec_ptr, values_vec_len);
     }
 
