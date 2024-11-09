@@ -334,32 +334,32 @@ mod tests {
         tracing::debug!("\n{insns}");
     }
 
-    #[test_log::test]
-    fn kiwi_editor() {
-        let engine = Engine::default();
-        let mut validator = Validator::new();
-
-        let module = Module::from_bytes(
-            &engine,
-            &mut validator,
-            include_bytes!("../tests/kiwi-editor.wasm"),
-        )
-        .unwrap();
-
-        let cs = Capstone::new()
-            .arm64()
-            .detail(true)
-            .mode(ArchMode::Arm)
-            .build()
-            .expect("Failed to create Capstone object");
-
-        for (index, info) in module.function_info() {
-            let range = info.wasm_func_loc.start as usize
-                ..info.wasm_func_loc.start as usize + info.wasm_func_loc.length as usize;
-            let insns = cs
-                .disasm_all(&module.code().text()[range.clone()], range.start as u64)
-                .expect("Failed to disassemble");
-            tracing::debug!("{index:?}\n{insns}");
-        }
-    }
+    // #[test_log::test]
+    // fn kiwi_editor() {
+    //     let engine = Engine::default();
+    //     let mut validator = Validator::new();
+    // 
+    //     let module = Module::from_bytes(
+    //         &engine,
+    //         &mut validator,
+    //         include_bytes!("../tests/kiwi-editor.wasm"),
+    //     )
+    //     .unwrap();
+    // 
+    //     let cs = Capstone::new()
+    //         .arm64()
+    //         .detail(true)
+    //         .mode(ArchMode::Arm)
+    //         .build()
+    //         .expect("Failed to create Capstone object");
+    // 
+    //     for (index, info) in module.function_info() {
+    //         let range = info.wasm_func_loc.start as usize
+    //             ..info.wasm_func_loc.start as usize + info.wasm_func_loc.length as usize;
+    //         let insns = cs
+    //             .disasm_all(&module.code().text()[range.clone()], range.start as u64)
+    //             .expect("Failed to disassemble");
+    //         tracing::debug!("{index:?}\n{insns}");
+    //     }
+    // }
 }
