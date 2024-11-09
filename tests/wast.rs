@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context};
 use cranelift_codegen::settings::Configurable;
 use k23_vm::{
-    ConstExprEvaluator, CraneliftCompiler, Extern, Instance, InstanceAllocator, Linker, Module,
+    ConstExprEvaluator, Engine, Extern, Instance, InstanceAllocator, Linker, Module,
     PlaceholderAllocatorDontUse, Store, Val,
 };
 use std::fmt::{Display, LowerHex};
@@ -199,33 +199,25 @@ impl<T> Outcome<T> {
 }
 
 pub struct WastContext {
+    engine: Engine,
     store: Store,
     linker: Linker,
     alloc: &'static dyn InstanceAllocator,
     const_eval: ConstExprEvaluator,
     validator: wasmparser::Validator,
-    compiler: CraneliftCompiler,
     current: Option<Instance>,
 }
 
 impl WastContext {
     fn new_default() -> anyhow::Result<Self> {
-        let isa_builder = cranelift_codegen::isa::lookup(target_lexicon::HOST)?;
-        let mut b = cranelift_codegen::settings::builder();
-        b.set("opt_level", "speed_and_size")?;
-        b.set("libcall_call_conv", "isa_default")?;
-        b.set("preserve_frame_pointers", "true")?;
-        b.set("enable_probestack", "true")?;
-        b.set("probestack_strategy", "inline")?;
-        let target_isa = isa_builder.finish(cranelift_codegen::settings::Flags::new(b))?;
-
-        let ctx = WastContext {
-            store: Store::default(),
-            linker: Linker::default(),
+        let engine = Engine::default();
+        let mut ctx = WastContext {
+            store: Store::new(&engine),
+            linker: Linker::new(&engine),
+            engine,
             alloc: &PlaceholderAllocatorDontUse,
             const_eval: ConstExprEvaluator::default(),
             validator: wasmparser::Validator::default(),
-            compiler: CraneliftCompiler::new(target_isa),
             current: None,
         };
         // ctx.linker
@@ -264,7 +256,7 @@ impl WastContext {
         //         println!("{f2}: f64");
         //     },
         // )?;
-        //
+
         // let ty = GlobalType {
         //     content_type: ValType::I32,
         //     mutable: false,
@@ -276,7 +268,7 @@ impl WastContext {
         //     "global_i32",
         //     Global::new(ty, Value::I32(666)),
         // )?;
-        //
+
         // let ty = GlobalType {
         //     content_type: ValType::I64,
         //     mutable: false,
@@ -288,7 +280,7 @@ impl WastContext {
         //     "global_i64",
         //     Global::new(ty, Value::I64(666)),
         // )?;
-        //
+
         // let ty = GlobalType {
         //     content_type: ValType::F32,
         //     mutable: false,
@@ -300,7 +292,7 @@ impl WastContext {
         //     "global_f32",
         //     Global::new(ty, Value::F32(f32::from_bits(0x4426_a666u32))),
         // )?;
-        //
+
         // let ty = GlobalType {
         //     content_type: ValType::F64,
         //     mutable: false,
@@ -312,7 +304,7 @@ impl WastContext {
         //     "global_f64",
         //     Global::new(ty, Value::F64(f64::from_bits(0x4084_d4cc_cccc_cccd))),
         // )?;
-        //
+
         // let ty = TableType {
         //     element_type: RefType::FUNCREF,
         //     table64: false,
@@ -326,7 +318,7 @@ impl WastContext {
         //     "table",
         //     Table::new(ty, Ref::Func(None)),
         // )?;
-        //
+
         // let ty = MemoryType {
         //     memory64: false,
         //     shared: false,
@@ -335,7 +327,7 @@ impl WastContext {
         //     page_size_log2: None,
         // };
         // ctx.linker
-        //     .define(ctx.store, "spectest", "memory", Memory::new(ty))?;
+        //     .define(&mut ctx.store, "spectest", "memory", Memory::new(ty))?;
 
         Ok(ctx)
     }
@@ -532,7 +524,9 @@ impl WastContext {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let mut results = vec![Val::I32(0); func.ty(&self.store).results().len()];
+        let ty = func.ty(&self.store);
+        let ty = ty.as_wasm_func_type();
+        let mut results = vec![Val::I32(0); ty.results.len()];
 
         match func.call(&mut self.store, &values, &mut results) {
             Ok(_) => Ok(Outcome::Ok(results)),
@@ -593,8 +587,8 @@ impl WastContext {
 
     fn instantiate_module(&mut self, module: &[u8]) -> anyhow::Result<Outcome<Instance>> {
         let module = Arc::new(Module::from_bytes(
+            &self.engine,
             &mut self.validator,
-            &self.compiler,
             module,
         )?);
 
@@ -646,7 +640,7 @@ fn wast_arg_to_val(arg: &WastArgCore) -> anyhow::Result<Val> {
         WastArgCore::I64(v) => Ok(Val::I64(*v)),
         WastArgCore::F32(v) => Ok(Val::F32(v.bits)),
         WastArgCore::F64(v) => Ok(Val::F64(v.bits)),
-        WastArgCore::V128(v) => Ok(Val::V128(v.to_le_bytes())),
+        WastArgCore::V128(v) => Ok(Val::V128(u128::from_le_bytes(v.to_le_bytes()))),
         // WastArgCore::RefNull(HeapType::Abstract {
         //                          ty: AbstractHeapType::Extern,
         //                          shared: false,
@@ -678,7 +672,7 @@ pub fn match_val(store: &Store, actual: &Val, expected: &WastRetCore) -> anyhow:
         // values, so we're testing for bit-for-bit equivalence
         (Val::F32(a), WastRetCore::F32(b)) => match_f32(*a, b),
         (Val::F64(a), WastRetCore::F64(b)) => match_f64(*a, b),
-        (Val::V128(a), WastRetCore::V128(b)) => match_v128(u128::from_le_bytes(*a), b),
+        (Val::V128(a), WastRetCore::V128(b)) => match_v128(*a, b),
 
         // Null references.
         // (
