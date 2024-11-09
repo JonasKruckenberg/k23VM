@@ -9,8 +9,8 @@ use crate::runtime::vmcontext::{VMArrayCallFunction, VMGlobalDefinition, VMWasmC
 use crate::runtime::{
     ConstExprEvaluator, Export, ExportedFunction, ExportedGlobal, ExportedMemory, ExportedTable,
     Imports, InstanceAllocator, OwnedVMContext, VMFuncRef, VMFunctionImport, VMGlobalImport,
-    VMMemoryDefinition, VMMemoryImport, VMOpaqueContext, VMTableDefinition, VMTableImport,
-    VMCONTEXT_MAGIC,
+    VMMemoryDefinition, VMMemoryImport, VMOffsets, VMOpaqueContext, VMTableDefinition,
+    VMTableImport, VMCONTEXT_MAGIC,
 };
 use crate::translate::{TableInitialValue, TableSegmentElements};
 use crate::{Extern, Module};
@@ -83,61 +83,12 @@ impl Instance {
         }
 
         let func = &self.module().translated().functions[index];
-        let sig = self.module.translated().types[func.signature];
 
         unsafe {
             let func_ref: *mut VMFuncRef = self.vmctx.plus_offset_mut::<VMFuncRef>(
                 self.module().vmoffsets().vmctx_vmfunc_ref(func.func_ref),
             );
-            self.construct_func_ref(index, sig, func_ref);
             Some(func_ref)
-        }
-    }
-    unsafe fn construct_func_ref(
-        &mut self,
-        index: FuncIndex,
-        sig: ModuleInternedTypeIndex,
-        into: *mut VMFuncRef,
-    ) {
-        let type_index = unsafe {
-            let base: *const VMSharedTypeIndex = *self
-                .vmctx
-                .plus_offset_mut(u32::from(self.module.vmoffsets().static_.vmctx_type_ids()));
-            *base.add(sig.index())
-        };
-
-        let func_ref =
-            if let Some(def_index) = self.module().translated().defined_func_index(index) {
-                let array_call = self.module().function_info()[def_index]
-                    .host_to_wasm_trampoline
-                    .expect("escaping function requires trampoline");
-                let wasm_call = self.module().function_info()[def_index].wasm_func_loc;
-
-                VMFuncRef {
-                    array_call: mem::transmute::<usize, VMArrayCallFunction>(
-                        self.module().code().resolve_function_loc(array_call),
-                    ),
-                    wasm_call: NonNull::new(self.module().code().resolve_function_loc(wasm_call)
-                        as *mut VMWasmCallFunction)
-                    .unwrap(),
-                    vmctx: VMOpaqueContext::from_vmcontext(self.vmctx.as_mut_ptr()),
-                    type_index,
-                }
-            } else {
-                let import = self.imported_function(index);
-
-                VMFuncRef {
-                    array_call: import.array_call,
-                    wasm_call: import.wasm_call,
-                    vmctx: import.vmctx,
-                    type_index,
-                }
-            };
-
-        // Safety: we have a `&mut self`, so we have exclusive access
-        // to this Instance.
-        unsafe {
-            ptr::write(into, func_ref);
         }
     }
     pub fn imported_function(&self, index: FuncIndex) -> &VMFunctionImport {
@@ -290,10 +241,14 @@ impl Instance {
             .vmctx
             .plus_offset::<u32>(u32::from(self.module.vmoffsets().static_.vmctx_magic()))
     }
-    pub(crate) unsafe fn vmctx_type_ids(&self) {
-        *self
+    pub(crate) unsafe fn vmctx_type_ids(&self) -> &[VMSharedTypeIndex] {
+        let ptr = *self
             .vmctx
-            .plus_offset(u32::from(self.module.vmoffsets().static_.vmctx_type_ids()))
+            .plus_offset(u32::from(self.module.vmoffsets().static_.vmctx_type_ids()));
+
+        let len = self.module.type_collection().type_map().len();
+
+        slice::from_raw_parts(ptr, len)
     }
     pub(crate) unsafe fn vmctx_builtin_functions(&self) -> *const VMBuiltinFunctionsArray {
         self.vmctx.plus_offset::<VMBuiltinFunctionsArray>(u32::from(
@@ -403,7 +358,8 @@ unsafe fn initialize_vmctx(
     let type_ids = module.type_ids();
     *vmctx.plus_offset_mut(u32::from(offsets.static_.vmctx_type_ids())) = type_ids.as_ptr();
 
-    // TODO func_refs: [VMFuncRef; num_escaped_funcs],
+    // initialize func_refs array
+    initialize_vmfunc_refs(vmctx, &module, &imports, offsets);
 
     // initialize the imports
     ptr::copy_nonoverlapping(
@@ -463,6 +419,64 @@ unsafe fn initialize_vmctx(
     }
 
     Ok(())
+}
+
+unsafe fn initialize_vmfunc_refs(
+    vmctx: &mut OwnedVMContext,
+    module: &&Module,
+    imports: &Imports,
+    offsets: &VMOffsets,
+) {
+    for (index, func) in module
+        .translated()
+        .functions
+        .iter()
+        .filter(|(_, f)| f.is_escaping())
+    {
+        let func_ref = if let Some(def_index) = module.translated().defined_func_index(index) {
+            let info = &module.function_info()[def_index];
+            let array_call = info
+                .host_to_wasm_trampoline
+                .expect("escaping function requires trampoline");
+            let wasm_call = info.wasm_func_loc;
+
+            VMFuncRef {
+                array_call: mem::transmute::<usize, VMArrayCallFunction>(
+                    module.code().resolve_function_loc(array_call),
+                ),
+                wasm_call: NonNull::new(
+                    module.code().resolve_function_loc(wasm_call) as *mut VMWasmCallFunction
+                )
+                .unwrap(),
+                vmctx: VMOpaqueContext::from_vmcontext(vmctx.as_mut_ptr()),
+                type_index: {
+                    let index = module.translated().types[func.signature];
+                    module.type_collection().lookup_shared_type(index).unwrap()
+                },
+            }
+        } else {
+            let import = &imports.functions[index.index()];
+            let type_index = module.translated().types[func.signature];
+            let type_index = module
+                .type_collection()
+                .lookup_shared_type(type_index)
+                .unwrap();
+            VMFuncRef {
+                array_call: import.array_call,
+                wasm_call: import.wasm_call,
+                vmctx: import.vmctx,
+                type_index,
+            }
+        };
+
+        let into = vmctx.plus_offset_mut::<VMFuncRef>(offsets.vmctx_vmfunc_ref(func.func_ref));
+
+        // Safety: we have a `&mut self`, so we have exclusive access
+        // to this Instance.
+        unsafe {
+            ptr::write(into, func_ref);
+        }
+    }
 }
 
 unsafe fn initialize_tables(
