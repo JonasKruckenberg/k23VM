@@ -48,21 +48,25 @@ impl Module {
     ) -> crate::Result<Self> {
         let (mut translation, types) = ModuleTranslator::new(validator).translate(bytes)?;
 
+        tracing::debug!("Gathering compile inputs...");
         let function_body_data = mem::take(&mut translation.function_bodies);
         let inputs = CompileInputs::from_module(&translation, &types, function_body_data);
 
+        tracing::debug!("Compiling inputs...");
         let unlinked_outputs = inputs.compile(engine.compiler())?;
+
+        tracing::debug!("Applying static relocations...");
         let (code, function_info, (trap_offsets, traps)) =
             unlinked_outputs.link_and_finish(engine, &translation.module)?;
 
         let type_collection = engine.type_registry().register_module_types(engine, types);
 
-        tracing::trace!("Allocating new memory map for compiled module...");
+        tracing::debug!("Allocating new memory map...");
         let vec = MmapVec::from_slice(&code)?;
         let mut code = CodeMemory::new(vec, trap_offsets, traps);
         code.publish()?;
         let code = Arc::new(code);
-        
+
         crate::placeholder::code_registry::register_code(&code);
 
         Ok(Self(Arc::new(ModuleInner {

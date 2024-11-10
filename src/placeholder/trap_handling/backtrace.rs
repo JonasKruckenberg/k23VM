@@ -28,11 +28,6 @@ impl Backtrace {
     ) {
         tracing::trace!("====== Capturing Backtrace ======");
 
-        match trap_pc_and_fp {
-            Some((pc, fp)) => {}
-            None => {}
-        }
-
         let (last_wasm_exit_pc, last_wasm_exit_fp) = match trap_pc_and_fp {
             // If we exited Wasm by catching a trap, then the Wasm-to-host
             // trampoline did not get a chance to save the last Wasm PC and FP,

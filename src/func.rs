@@ -26,16 +26,6 @@ impl Func {
         FuncType(ty)
     }
 
-    pub fn call(
-        &self,
-        store: &mut Store,
-        params: &[Val],
-        results: &mut [Val],
-    ) -> crate::Result<()> {
-        // TODO typecheck params
-        unsafe { self.call_unchecked(store, params, results) }
-    }
-
     /// Calls the given function with the provided arguments and places the results in the provided
     /// results slice.
     ///
@@ -138,7 +128,7 @@ impl Func {
     }
 }
 
-pub fn enter_wasm(vmctx: *mut VMContext, offsets: &StaticVMOffsets) -> WasmExecutionGuard {
+fn enter_wasm(vmctx: *mut VMContext, offsets: &StaticVMOffsets) -> WasmExecutionGuard {
     let stack_pointer = placeholder::arch::get_stack_pointer();
     let wasm_stack_limit = stack_pointer - MAX_WASM_STACK;
     unsafe {

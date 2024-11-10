@@ -163,10 +163,10 @@ impl WasmHeapType {
     /// Get this types top type
     pub(crate) fn top(&self) -> WasmHeapTopType {
         let inner = match self.ty {
-            WasmHeapTypeInner::Extern | WasmHeapTypeInner::NoExtern => WasmHeapTopTypeInner::Extern,
             WasmHeapTypeInner::Func
             | WasmHeapTypeInner::ConcreteFunc(_)
-            | WasmHeapTypeInner::NoFunc => WasmHeapTopTypeInner::Extern,
+            | WasmHeapTypeInner::NoFunc => WasmHeapTopTypeInner::Func,
+            WasmHeapTypeInner::Extern | WasmHeapTypeInner::NoExtern => WasmHeapTopTypeInner::Extern,
             WasmHeapTypeInner::Any
             | WasmHeapTypeInner::Eq
             | WasmHeapTypeInner::I31
@@ -720,7 +720,7 @@ impl TypeTrace for WasmStorageType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EntityType {
     Function(CanonicalizedTypeIndex),
     Table(TableDesc),

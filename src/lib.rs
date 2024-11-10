@@ -4,6 +4,7 @@
 #![feature(allocator_api)]
 #![feature(thread_local)]
 #![deny(missing_docs)]
+#![allow(clippy::must_use_candidate)]
 #![allow(unused)]
 
 extern crate alloc;

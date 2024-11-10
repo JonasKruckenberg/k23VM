@@ -92,7 +92,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             }
             Payload::TagSection(tags) => {
                 self.validator.tag_section(&tags)?;
-                return Err(wasm_unsupported!("exception handling is unsupported"));
+                self.parse_tag_section(tags)?;
             }
             Payload::GlobalSection(globals) => {
                 self.validator.global_section(&globals)?;

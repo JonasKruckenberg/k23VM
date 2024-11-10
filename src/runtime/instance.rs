@@ -508,7 +508,7 @@ unsafe fn initialize_tables(
     // run active elements
     for segment in module.translated().table_initializers.segments.iter() {
         let elements: Vec<_> = match &segment.elements {
-            TableSegmentElements::Functions(funcs) => {
+            TableSegmentElements::Functions(_funcs) => {
                 todo!()
             }
             TableSegmentElements::Expressions(exprs) => exprs
