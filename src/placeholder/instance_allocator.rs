@@ -3,6 +3,7 @@ use crate::runtime::{InstanceAllocator, Memory, Table};
 use crate::runtime::{OwnedVMContext, VMOffsets};
 use crate::translate::{MemoryDesc, TableDesc, TranslatedModule};
 
+/// A placeholder allocator impl that just delegates to runtime types `new` methods.
 pub struct PlaceholderAllocatorDontUse;
 
 impl InstanceAllocator for PlaceholderAllocatorDontUse {

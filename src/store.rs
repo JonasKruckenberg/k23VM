@@ -5,6 +5,7 @@ use core::marker::PhantomData;
 use core::{fmt, mem};
 use hashbrown::HashMap;
 
+/// A store owns WebAssembly instances and their associated data (tables, memories, globals and functions).
 #[derive(Debug)]
 pub struct Store {
     pub(crate) engine: Engine,
@@ -19,6 +20,7 @@ pub struct Store {
 }
 
 impl Store {
+    /// Constructs a new store with the given engine.
     pub fn new(engine: &Engine) -> Self {
         Self {
             engine: engine.clone(),
@@ -33,14 +35,17 @@ impl Store {
         }
     }
 
+    /// Takes the `Vec<VMVal>` storage used for passing arguments using the array call convention.
     pub(crate) fn take_wasm_vmval_storage(&mut self) -> Vec<VMVal> {
         mem::take(&mut self.wasm_vmval_storage)
     }
 
+    /// Returns the `Vec<VMVal>` storage allowing it's allocation to be reused for the next array call.
     pub(crate) fn return_wasm_vmval_storage(&mut self, storage: Vec<VMVal>) {
         self.wasm_vmval_storage = storage;
     }
 
+    /// Looks up the instance handle associated with the given `vmctx` pointer.
     pub(crate) fn get_instance_from_vmctx(
         &self,
         vmctx: *mut VMContext,
@@ -49,6 +54,7 @@ impl Store {
         self.vmctx2instance[&vmctx]
     }
 
+    /// Inserts a new instance into the store and returns a handle to it.
     pub(crate) fn push_instance(
         &mut self,
         mut instance: runtime::Instance,
@@ -62,7 +68,8 @@ impl Store {
         handle
     }
 
-    pub fn push_function(
+    /// Inserts a new function into the store and returns a handle to it.
+    pub(crate) fn push_function(
         &mut self,
         func: runtime::ExportedFunction,
     ) -> Stored<runtime::ExportedFunction> {
@@ -71,13 +78,18 @@ impl Store {
         Stored::new(index)
     }
 
-    pub fn push_table(&mut self, table: runtime::ExportedTable) -> Stored<runtime::ExportedTable> {
+    /// Inserts a new table into the store and returns a handle to it.
+    pub(crate) fn push_table(
+        &mut self,
+        table: runtime::ExportedTable,
+    ) -> Stored<runtime::ExportedTable> {
         let index = self.exported_tables.len();
         self.exported_tables.push(table);
         Stored::new(index)
     }
 
-    pub fn push_memory(
+    /// Inserts a new memory into the store and returns a handle to it.
+    pub(crate) fn push_memory(
         &mut self,
         memory: runtime::ExportedMemory,
     ) -> Stored<runtime::ExportedMemory> {
@@ -86,7 +98,8 @@ impl Store {
         Stored::new(index)
     }
 
-    pub fn push_global(
+    /// Inserts a new global into the store and returns a handle to it.
+    pub(crate) fn push_global(
         &mut self,
         global: runtime::ExportedGlobal,
     ) -> Stored<runtime::ExportedGlobal> {
@@ -100,16 +113,19 @@ macro_rules! stored_impls {
     ($bind:ident $(($ty:path, $has:ident, $get:ident, $get_mut:ident, $field:expr))*) => {
         $(
             impl Store {
+                #[allow(missing_docs)]
                 pub fn $has(&self, index: Stored<$ty>) -> bool {
                     let $bind = self;
                     $field.get(index.index).is_some()
                 }
 
+                #[allow(missing_docs)]
                 pub fn $get(&self, index: Stored<$ty>) -> Option<&$ty> {
                     let $bind = self;
                     $field.get(index.index)
                 }
 
+                #[allow(missing_docs)]
                 pub fn $get_mut(&mut self, index: Stored<$ty>) -> Option<&mut $ty> {
                     let $bind = self;
                     $field.get_mut(index.index)

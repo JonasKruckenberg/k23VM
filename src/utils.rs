@@ -5,6 +5,7 @@ use cranelift_codegen::ir;
 use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 
+/// Helper macro to generate accessors for an enum.
 #[macro_export]
 macro_rules! enum_accessors {
     ($bind:ident $(($variant:ident($ty:ty) $is:ident $get:ident $unwrap:ident $cvt:expr))*) => ($(
@@ -35,6 +36,7 @@ macro_rules! enum_accessors {
     )*)
 }
 
+/// Like `enum_accessors!`, but generated methods take ownership of `self`.
 #[macro_export]
 macro_rules! owned_enum_accessors {
     ($bind:ident $(($variant:ident($ty:ty) $get:ident $cvt:expr))*) => ($(

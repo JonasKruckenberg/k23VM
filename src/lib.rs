@@ -4,6 +4,7 @@
 #![feature(allocator_api)]
 #![feature(thread_local)]
 #![deny(missing_docs)]
+#![allow(unused)]
 
 extern crate alloc;
 extern crate core;
@@ -31,6 +32,7 @@ mod utils;
 mod values;
 
 pub use errors::Error;
+#[allow(missing_docs)]
 pub type Result<T> = core::result::Result<T, Error>;
 pub use engine::Engine;
 pub use func::Func;
@@ -74,11 +76,15 @@ pub fn host_page_size() -> usize {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE).try_into().unwrap() }
 }
 
+/// An export from a WebAssembly instance.
 pub struct Export<'instance> {
+    /// The name of the export.
     pub name: &'instance str,
+    /// The exported value.
     pub value: Extern,
 }
 
+/// A WebAssembly external value which is just any type that can be imported or exported between modules.
 #[derive(Clone, Debug)]
 pub enum Extern {
     /// A WebAssembly `func` which can be called.

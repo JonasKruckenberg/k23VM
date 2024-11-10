@@ -2,6 +2,7 @@ use crate::runtime::VMTableImport;
 use crate::store::Stored;
 use crate::{runtime, Store};
 
+/// A WebAssembly table instance.
 #[derive(Debug, Clone, Copy)]
 pub struct Table(Stored<runtime::ExportedTable>);
 

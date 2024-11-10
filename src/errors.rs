@@ -11,6 +11,7 @@ macro_rules! wasm_unsupported {
 }
 
 #[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
     /// The input WebAssembly code is invalid.
     InvalidWebAssembly {

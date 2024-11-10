@@ -7,25 +7,26 @@ use crate::Module;
 use core::mem;
 use cranelift_entity::PrimaryMap;
 
+/// A type that knows how to allocate backing memory for instance resources.
 pub trait InstanceAllocator {
+    /// Allocate the `VMContext` for an instance.
     unsafe fn allocate_vmctx(
         &self,
         module: &TranslatedModule,
         offsets: &VMOffsets,
     ) -> crate::Result<OwnedVMContext>;
 
-    /// Allocate a memory for an instance.
     ///
     /// # Unsafety
     ///
-    /// The memory and its associated module must have already been validated by
-    /// `Self::validate_module` and passed that validation.
+    /// Allocate a memory for an instance.
     unsafe fn allocate_memory(
         &self,
         module: &TranslatedModule,
         memory_desc: &MemoryDesc,
         memory_index: DefinedMemoryIndex,
     ) -> crate::Result<Memory>;
+
     /// Deallocate an instance's previously allocated memory.
     ///
     /// # Unsafety
@@ -34,18 +35,15 @@ pub trait InstanceAllocator {
     /// `Self::allocate_memory`, be at the given index, and must currently be
     /// allocated. It must never be used again.
     unsafe fn deallocate_memory(&self, memory_index: DefinedMemoryIndex, memory: Memory);
+
     /// Allocate a table for an instance.
-    ///
-    /// # Unsafety
-    ///
-    /// The table and its associated module must have already been validated by
-    /// `Self::validate_module` and passed that validation.
     unsafe fn allocate_table(
         &self,
         module: &TranslatedModule,
         table_desc: &TableDesc,
         table_index: DefinedTableIndex,
     ) -> crate::Result<Table>;
+
     /// Deallocate an instance's previously allocated table.
     ///
     /// # Unsafety
@@ -55,6 +53,9 @@ pub trait InstanceAllocator {
     /// used again.
     unsafe fn deallocate_table(&self, table_index: DefinedTableIndex, table: Table);
 
+    /// Allocate multiple memories at once.
+    ///
+    /// By default, this will delegate the actual allocation to `Self::allocate_memory`.
     unsafe fn allocate_memories(
         &self,
         module: &TranslatedModule,
@@ -69,6 +70,9 @@ pub trait InstanceAllocator {
         Ok(())
     }
 
+    /// Allocate multiple tables at once.
+    ///
+    /// By default, this will delegate the actual allocation to `Self::allocate_table`.
     unsafe fn allocate_tables(
         &self,
         module: &TranslatedModule,
@@ -83,6 +87,14 @@ pub trait InstanceAllocator {
         Ok(())
     }
 
+    /// Deallocates multiple memories at once.
+    ///
+    /// By default, this will delegate the actual deallocation to `Self::deallocate_memory`.
+    ///
+    /// # Unsafety
+    ///
+    /// Just like `Self::deallocate_memory` all memories must have been allocated by
+    /// `Self::allocate_memories`/`Self::allocate_memory` and must never be used again.
     unsafe fn deallocate_memories(&self, memories: &mut PrimaryMap<DefinedMemoryIndex, Memory>) {
         for (memory_index, memory) in mem::take(memories) {
             // Because deallocating memory is infallible, we don't need to worry
@@ -93,12 +105,24 @@ pub trait InstanceAllocator {
         }
     }
 
+    /// Deallocates multiple tables at once.
+    ///
+    /// By default, this will delegate the actual deallocation to `Self::deallocate_table`.
+    ///
+    /// # Unsafety
+    ///
+    /// Just like `Self::deallocate_table` all tables must have been allocated by
+    /// `Self::allocate_tables`/`Self::allocate_table` and must never be used again.
     unsafe fn deallocate_tables(&self, tables: &mut PrimaryMap<DefinedTableIndex, Table>) {
         for (table_index, table) in mem::take(tables) {
             self.deallocate_table(table_index, table);
         }
     }
 
+    /// Allocate all resources required to instantiate a module.
+    ///
+    /// By default, this will in-turn call `Self::allocate_vmctx`, `Self::allocate_tables` and
+    /// `Self::allocate_memories` as well as perform necessary clean up.
     unsafe fn allocate_module(
         &self,
         module: &Module,

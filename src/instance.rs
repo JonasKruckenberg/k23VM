@@ -7,10 +7,25 @@ use crate::store::Stored;
 use crate::table::Table;
 use crate::{runtime, Export, Extern, Module, Store};
 
+/// An instantiated WebAssembly module.
+///
+/// This is the main representation of all runtime state associated with a running WebAssembly module.
+///
+/// # Instance and `VMContext`
+///
+/// `Instance` and `VMContext` are essentially two halves of the same data structure. `Instance` is
+/// the privileged host-side half responsible for administrating execution, while `VMContext` holds the
+/// actual data that is accessed by compiled WASM code.
 #[derive(Debug, Clone, Copy)]
 pub struct Instance(Stored<runtime::Instance>);
 
 impl Instance {
+    /// Instantiates a new `Instance`.
+    ///
+    /// # Unsafety
+    ///
+    /// This functions assumes the provided `imports` have already been validated and typechecked for
+    /// compatibility with the `module` being instantiated.
     pub(crate) unsafe fn new_unchecked(
         store: &mut Store,
         alloc: &dyn InstanceAllocator,
@@ -23,10 +38,12 @@ impl Instance {
         Ok(Self(handle))
     }
 
+    /// Returns the module this instance was instantiated from.
     pub fn module<'s>(&self, store: &'s Store) -> &'s Module {
         store[self.0].module()
     }
 
+    /// Returns an iterator over the exports of this instance.
     pub(crate) fn exports<'a>(
         &self,
         store: &'a mut Store,
@@ -57,28 +74,34 @@ impl Instance {
             })
     }
 
+    /// Attempts to get an export from this instance.
     pub fn get_export(&self, store: &mut Store, name: &str) -> Option<Extern> {
         let (export_name_index, _, index) =
             self.module(store).translated().exports.get_full(name)?;
         self._get_export(store, *index, export_name_index)
     }
 
+    /// Attempts to get an exported `Func` from this instance.
     pub fn get_func(&self, store: &mut Store, name: &str) -> Option<Func> {
         self.get_export(store, name)?.into_func()
     }
 
+    /// Attempts to get an exported `Table` from this instance.
     pub fn get_table(&self, store: &mut Store, name: &str) -> Option<Table> {
         self.get_export(store, name)?.into_table()
     }
 
+    /// Attempts to get an exported `Memory` from this instance.
     pub fn get_memory(&self, store: &mut Store, name: &str) -> Option<Memory> {
         self.get_export(store, name)?.into_memory()
     }
 
+    /// Attempts to get an exported `Global` from this instance.
     pub fn get_global(&self, store: &mut Store, name: &str) -> Option<Global> {
         self.get_export(store, name)?.into_global()
     }
 
+    /// Print a debug representation of this instances `VMContext` to the logger.
     pub fn debug_vmctx(&self, store: &Store) {
         store[self.0].debug_vmctx()
     }

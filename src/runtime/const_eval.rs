@@ -2,12 +2,16 @@ use crate::runtime::vmcontext::VMVal;
 use crate::translate::{ConstExpr, ConstOp};
 use smallvec::SmallVec;
 
+/// Simple interpreter for constant expressions.
 #[derive(Debug, Default)]
 pub struct ConstExprEvaluator {
     stack: SmallVec<[VMVal; 2]>,
 }
 
 impl ConstExprEvaluator {
+    /// Evaluate a `ConstExpr` returning the result value. The only use of const expressions at the
+    /// moment is to produce init values for globals, or tables or to calculate offsets. As such all
+    /// uses *require* a const expression to return exactly one result.
     pub fn eval(&mut self, expr: &ConstExpr) -> crate::Result<VMVal> {
         for op in expr.ops() {
             match op {

@@ -10,6 +10,13 @@ use core::mem;
 use cranelift_entity::PrimaryMap;
 use wasmparser::Validator;
 
+/// A compiled WebAssembly module, ready to be instantiated.
+///
+/// It holds all compiled code as well as the module's type information and other metadata (e.g. for
+/// trap handling and backtrace information).
+///
+/// Currently, no form of dynamic tiering is implemented instead all functions are compiled synchronously
+/// when the module is created. This is expected to change though.
 #[derive(Debug, Clone)]
 pub struct Module(Arc<ModuleInner>);
 
@@ -23,15 +30,17 @@ struct ModuleInner {
 }
 
 impl Module {
-    pub fn from_str(
-        engine: &Engine,
-        validator: &mut Validator,
-        str: &str,
-    ) -> crate::Result<Self> {
+    /// Creates a new module from the given WebAssembly text format.
+    ///
+    /// This will parse, translate and compile the module and is the first step in Wasm execution.
+    pub fn from_wat(engine: &Engine, validator: &mut Validator, str: &str) -> crate::Result<Self> {
         let bytes = wat::parse_str(str)?;
         Self::from_bytes(engine, validator, &bytes)
     }
 
+    /// Creates a new module from the given WebAssembly bytes.
+    ///
+    /// This will parse, translate and compile the module and is the first step in Wasm execution.
     pub fn from_bytes(
         engine: &Engine,
         validator: &mut Validator,
@@ -68,10 +77,12 @@ impl Module {
         })))
     }
 
+    /// Returns the modules imports.
     pub fn imports(&self) -> impl ExactSizeIterator<Item = &Import> {
         self.0.translated.imports.iter()
     }
 
+    /// Returns the modules exports.
     pub fn exports(&self) -> impl ExactSizeIterator<Item = (&str, EntityIndex)> + '_ {
         self.0
             .translated
@@ -80,6 +91,7 @@ impl Module {
             .map(|(name, index)| (name.as_str(), *index))
     }
 
+    /// Returns the modules name if present.
     pub fn name(&self) -> Option<&str> {
         self.0.translated.name.as_deref()
     }

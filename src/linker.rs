@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
 
+/// A dynamic linker for WebAssembly modules.
 #[derive(Debug)]
 pub struct Linker {
     engine: Engine,
@@ -21,6 +22,9 @@ struct ImportKey {
 }
 
 impl Linker {
+    /// Create a new `Linker`.
+    ///
+    /// This linker is scoped to the provided engine and cannot be used to link modules from other engines.
     pub fn new(engine: &Engine) -> Self {
         Self {
             engine: engine.clone(),
@@ -30,6 +34,7 @@ impl Linker {
         }
     }
 
+    /// Attempt to retrieve a definition from this linker.
     pub fn get(&self, module: &str, name: &str) -> Option<&Extern> {
         let key = ImportKey {
             module: *self.string2idx.get(module)?,
@@ -38,6 +43,7 @@ impl Linker {
         self.map.get(&key)
     }
 
+    /// Alias all exports of `module` under the name `as_module`.
     pub fn alias_module(&mut self, module: &str, as_module: &str) -> crate::Result<&mut Self> {
         let module = self.intern_str(module);
         let as_module = self.intern_str(as_module);
@@ -59,6 +65,7 @@ impl Linker {
         Ok(self)
     }
 
+    /// Define all exports of the provided `instance` under the module name `module_name`.
     pub fn define_instance(
         &mut self,
         store: &mut Store,
@@ -77,6 +84,12 @@ impl Linker {
         Ok(self)
     }
 
+    /// Instantiate the provided `module`.
+    ///
+    /// This step resolve the modules imports using definitions from this linker, then pass them
+    /// on to `Instance::new_unchecked` for instantiation.
+    ///
+    /// Each import of module will be looked up in this Linker and must have previously been defined.
     pub fn instantiate(
         &self,
         store: &mut Store,

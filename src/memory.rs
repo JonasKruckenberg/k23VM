@@ -2,6 +2,7 @@ use crate::runtime::VMMemoryImport;
 use crate::store::Stored;
 use crate::{runtime, Store};
 
+/// A WebAssembly linear memory instance.
 #[derive(Debug, Clone, Copy)]
 pub struct Memory(Stored<runtime::ExportedMemory>);
 

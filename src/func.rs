@@ -10,10 +10,12 @@ use alloc::string::ToString;
 use core::ffi::c_void;
 use core::mem;
 
+/// A WebAssembly function.
 #[derive(Debug, Clone, Copy)]
 pub struct Func(Stored<runtime::ExportedFunction>);
 
 impl Func {
+    /// Returns the type of this function.
     pub fn ty<'s>(&self, store: &'s Store) -> FuncType {
         let func_ref = unsafe { store[self.0].func_ref.as_ref() };
         let ty = store
@@ -34,7 +36,14 @@ impl Func {
         unsafe { self.call_unchecked(store, params, results) }
     }
 
-    unsafe fn call_unchecked(
+    /// Calls the given function with the provided arguments and places the results in the provided
+    /// results slice.
+    ///
+    /// # Unsafety
+    ///
+    /// It is up to the caller to ensure the provided arguments are of the correct types and that
+    /// the `results` slice has enough space to hold the results of the function.
+    pub unsafe fn call_unchecked(
         &self,
         store: &mut Store,
         params: &[Val],
@@ -157,6 +166,9 @@ impl Drop for WasmExecutionGuard {
     }
 }
 
+/// A WebAssembly function type.
+///
+/// This is essentially a reference counted index into the engine's type registry.
 pub struct FuncType(RegisteredType);
 
 impl FuncType {

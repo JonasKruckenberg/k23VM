@@ -25,7 +25,7 @@ use wasmparser::{
     TableSectionReader, TagSectionReader, TypeRef, TypeSectionReader, Validator, WasmFeatures,
 };
 
-/// A WebAssembly module translator.
+/// A translator for converting the output of `wasmparser` into types used by this crate.
 pub struct ModuleTranslator<'a, 'data> {
     result: ModuleTranslation<'data>,
     validator: &'a mut Validator,
@@ -33,6 +33,7 @@ pub struct ModuleTranslator<'a, 'data> {
 }
 
 impl<'a, 'data> ModuleTranslator<'a, 'data> {
+    /// Creates a new `ModuleTranslator` with the given `Validator`.
     pub fn new(validator: &'a mut Validator) -> Self {
         Self {
             types: ModuleTypesBuilder::new(validator),
@@ -41,9 +42,9 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         }
     }
 
-    /// Translate raw WASM bytes into a `Translation`.
+    /// Translate raw WASM bytes into a `ModuleTranslation`.
     ///
-    /// Returns the translation along with it's interned types and strings.
+    /// Returns the translation along with it's interned types.
     pub fn translate(
         mut self,
         data: &'data [u8],

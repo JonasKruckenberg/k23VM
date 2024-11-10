@@ -2,6 +2,7 @@ use crate::runtime::VMGlobalImport;
 use crate::store::Stored;
 use crate::{runtime, Store, Val};
 
+/// A WebAssembly global instance.
 #[derive(Debug, Clone, Copy)]
 pub struct Global(Stored<runtime::ExportedGlobal>);
 
@@ -12,6 +13,7 @@ impl Global {
     // pub fn ty(&self, _store: &Store) -> &GlobalType {
     //     todo!()
     // }
+    /// Get the current value of the global.
     pub fn get(&self, _store: &Store) -> Val {
         todo!()
     }

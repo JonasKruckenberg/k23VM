@@ -4,6 +4,7 @@ use crate::translate::{WasmHeapTopTypeInner, WasmHeapType, WasmValType};
 use crate::{enum_accessors, Store};
 use core::ptr;
 
+/// A reference value that a WebAssembly module can consume or produce.
 #[derive(Debug, Clone, Copy)]
 pub enum Val {
     /// A 32-bit integer.
@@ -125,11 +126,14 @@ impl From<Ref> for Val {
     }
 }
 
+/// A reference value that a WebAssembly module can consume or produce.
 pub enum Ref {
+    /// A function reference.
     Func(Option<Func>),
 }
 
 impl Ref {
+    /// Returns the null reference for the given heap type.
     #[inline]
     pub fn null(heap_type: &WasmHeapType) -> Self {
         match heap_type.top().inner {
@@ -152,7 +156,10 @@ impl Ref {
     pub fn is_non_null(&self) -> bool {
         !self.is_null()
     }
+}
 
+#[allow(irrefutable_let_patterns)] // bc we only have one enum variant rn
+impl Ref {
     enum_accessors! {
         e
         (Func(&Option<Func>) is_func get_func unwrap_func e)
