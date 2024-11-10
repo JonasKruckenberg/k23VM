@@ -16,9 +16,14 @@ pub trait InstanceAllocator {
         offsets: &VMOffsets,
     ) -> crate::Result<OwnedVMContext>;
 
+    /// Deallocate a `VMContext` of an instance.
     ///
     /// # Unsafety
     ///
+    /// The `VMContext` must have previously been allocated by
+    /// `Self::allocate_vmctx`
+    unsafe fn deallocate_vmctx(&self, vmctx: OwnedVMContext);
+
     /// Allocate a memory for an instance.
     unsafe fn allocate_memory(
         &self,

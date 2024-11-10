@@ -15,6 +15,8 @@ impl InstanceAllocator for PlaceholderAllocatorDontUse {
         OwnedVMContext::try_new(plan)
     }
 
+    unsafe fn deallocate_vmctx(&self, _vmctx: OwnedVMContext) {}
+
     unsafe fn allocate_memory(
         &self,
         _module: &TranslatedModule,
