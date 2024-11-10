@@ -3,6 +3,7 @@ use core::ops::Range;
 use core::ptr::NonNull;
 use core::{ptr, slice};
 use rustix::mm::MprotectFlags;
+use crate::placeholder::host_page_size;
 
 #[derive(Debug)]
 pub struct Mmap {
@@ -91,7 +92,7 @@ impl Mmap {
             ptr.byte_add(start).cast::<u8>() <= ptr.byte_add(self.memory.len()).cast::<u8>()
         });
         assert_eq!(
-            unsafe { ptr.byte_add(start).cast::<u8>() } as usize % crate::host_page_size(),
+            unsafe { ptr.byte_add(start).cast::<u8>() } as usize % host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );
@@ -117,7 +118,7 @@ impl Mmap {
         assert!(range.end <= self.len());
         assert!(range.start <= range.end);
         assert_eq!(
-            range.start % crate::host_page_size(),
+            range.start % host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );
@@ -150,7 +151,7 @@ impl Mmap {
         assert!(range.end <= self.len());
         assert!(range.start <= range.end);
         assert_eq!(
-            range.start % crate::host_page_size(),
+            range.start % host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );

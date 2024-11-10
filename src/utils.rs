@@ -4,6 +4,7 @@ use core::hash::{BuildHasher, Hash};
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
+use crate::placeholder::host_page_size;
 
 /// Helper macro to generate accessors for an enum.
 #[macro_export]
@@ -123,11 +124,11 @@ pub fn array_call_signature(isa: &dyn TargetIsa) -> ir::Signature {
 
 /// Is `bytes` a multiple of the host page size?
 pub fn usize_is_multiple_of_host_page_size(bytes: usize) -> bool {
-    bytes % crate::host_page_size() == 0
+    bytes % host_page_size() == 0
 }
 
 pub fn round_u64_up_to_host_pages(bytes: u64) -> u64 {
-    let page_size = u64::try_from(crate::host_page_size()).unwrap();
+    let page_size = u64::try_from(host_page_size()).unwrap();
     debug_assert!(page_size.is_power_of_two());
     bytes
         .checked_add(page_size - 1)

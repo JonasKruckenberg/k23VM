@@ -71,11 +71,6 @@ pub const MEMORY_MAX: usize = 1 << 32;
 /// The absolute maximum size of a table in elements
 pub const TABLE_MAX: usize = 1 << 10;
 
-/// Returns the host page size in bytes.
-pub fn host_page_size() -> usize {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE).try_into().unwrap() }
-}
-
 /// An export from a WebAssembly instance.
 pub struct Export<'instance> {
     /// The name of the export.
