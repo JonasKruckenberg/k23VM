@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Jonas Kruckenberg <iterpre@protonmail.com>"]
 license = "MIT"
-#
-#[[bench]]
-#name = "translation"
-#harness = false
-#
-#[[bench]]
-#name = "compilation"
-#harness = false
+
+[[bench]]
+name = "translation"
+harness = false
+
+[[bench]]
+name = "compilation"
+harness = false
 
 [dependencies]
 tracing = { version = "0.1.40", default-features = false, features = ["attributes", "log"] }
