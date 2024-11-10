@@ -3,6 +3,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
 use cranelift_codegen::CodegenError;
+use crate::translate::EntityType;
 
 /// Convenience macro for creating an `Error::Unsupported` variant.
 #[macro_export]
@@ -19,6 +20,12 @@ pub enum Error {
         message: String,
         /// The bytecode offset where the error occurred.
         offset: usize,
+    },
+    /// A required import was not provided.
+    MissingImport {
+        module: String,
+        field: String,
+        type_: EntityType
     },
     /// The WebAssembly code used an unsupported feature.
     Unsupported(String),
@@ -38,6 +45,15 @@ impl fmt::Display for Error {
             Error::InvalidWebAssembly { message, offset } => {
                 f.write_fmt(format_args!("invalid WASM input at {offset}: {message}"))
             }
+            Error::MissingImport { module, field, type_ } => {
+                let type_ = match type_ {
+                    EntityType::Function(_) => "function",
+                    EntityType::Table(_) => "table",
+                    EntityType::Memory(_) => "memory",
+                    EntityType::Global(_) => "global",
+                };
+                f.write_fmt(format_args!("Missing required import {module}::{field} ({type_})"))
+            },
             Error::Unsupported(feature) => f.write_fmt(format_args!(
                 "Feature used by the WebAssembly code is not supported: {feature}"
             )),

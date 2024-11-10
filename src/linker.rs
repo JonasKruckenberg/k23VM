@@ -1,6 +1,7 @@
 use crate::runtime::{ConstExprEvaluator, Imports, InstanceAllocator};
 use crate::translate::EntityType;
-use crate::{Engine, Extern, Instance, Module, Store};
+use crate::{Engine, Error, Extern, Instance, Module, Store};
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use hashbrown::hash_map::Entry;
@@ -99,12 +100,13 @@ impl Linker {
     ) -> crate::Result<Instance> {
         let mut imports = Imports::with_capacity_for(module.translated());
         for import in module.imports() {
-            let def = self.get(&import.module, &import.name).unwrap_or_else(|| {
-                panic!(
-                    "missing {:?} import {}::{}",
-                    import.ty, import.module, import.name
-                )
-            });
+            let def =
+                self.get(&import.module, &import.name)
+                    .ok_or_else(|| Error::MissingImport {
+                        module: import.module.to_string(),
+                        field: import.name.to_string(),
+                        type_: import.ty.clone(),
+                    })?;
 
             match (def, &import.ty) {
                 (Extern::Func(func), EntityType::Function(_ty)) => {
