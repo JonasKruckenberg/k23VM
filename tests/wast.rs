@@ -392,7 +392,7 @@ impl WastContext {
                 self.perform_invoke(i)?;
             }
             WastDirective::AssertMalformed { module, .. } => {
-                if let Ok(_) = self.wat(module, path, wat) {
+                if let Ok(()) = self.wat(module, path, wat) {
                     bail!("expected malformed module to fail to instantiate");
                 }
             }
@@ -496,13 +496,10 @@ impl WastContext {
     }
 
     fn register(&mut self, name: Option<&str>, as_name: &str) -> anyhow::Result<()> {
-        match name {
-            Some(name) => self.linker.alias_module(name, as_name)?,
-            None => {
-                let current = self.current.as_ref().context("no previous instance")?;
-                self.linker
-                    .define_instance(&mut self.store, as_name, *current)?
-            }
+        if let Some(name) = name { self.linker.alias_module(name, as_name)? } else {
+            let current = self.current.as_ref().context("no previous instance")?;
+            self.linker
+                .define_instance(&mut self.store, as_name, *current)?
         };
 
         Ok(())
@@ -528,7 +525,7 @@ impl WastContext {
         let mut results = vec![Val::I32(0); ty.results.len()];
 
         match func.call(&mut self.store, &values, &mut results) {
-            Ok(_) => Ok(Outcome::Ok(results)),
+            Ok(()) => Ok(Outcome::Ok(results)),
             Err(e) => Ok(Outcome::Trap(e.into())),
         }
     }

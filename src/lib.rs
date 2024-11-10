@@ -3,7 +3,7 @@
 #![cfg_attr(feature = "no_std", no_std)]
 #![feature(allocator_api)]
 #![feature(thread_local)]
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 extern crate alloc;
 extern crate core;

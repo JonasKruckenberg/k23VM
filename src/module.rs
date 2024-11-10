@@ -9,7 +9,6 @@ use alloc::sync::Arc;
 use core::mem;
 use cranelift_entity::PrimaryMap;
 use wasmparser::Validator;
-use crate::trap::Trap;
 
 #[derive(Debug, Clone)]
 pub struct Module(Arc<ModuleInner>);
