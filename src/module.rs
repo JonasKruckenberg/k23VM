@@ -24,7 +24,7 @@ struct ModuleInner {
 }
 
 impl Module {
-    pub(crate) fn from_str(
+    pub fn from_str(
         engine: &Engine,
         validator: &mut Validator,
         str: &str,

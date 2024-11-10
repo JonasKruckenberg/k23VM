@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail, Context};
-use cranelift_codegen::settings::Configurable;
 use k23_vm::{
     ConstExprEvaluator, Engine, Extern, Instance, InstanceAllocator, Linker, Module,
     PlaceholderAllocatorDontUse, Store, Val,
@@ -211,7 +210,7 @@ pub struct WastContext {
 impl WastContext {
     fn new_default() -> anyhow::Result<Self> {
         let engine = Engine::default();
-        let mut ctx = WastContext {
+        let ctx = WastContext {
             store: Store::new(&engine),
             linker: Linker::new(&engine),
             engine,

@@ -36,9 +36,13 @@ impl<T> MmapVec<T> {
     }
 
     pub fn from_slice(slice: &[T]) -> crate::Result<Self> {
-        let mut this = Self::with_reserved(round_usize_up_to_host_pages(slice.len()))?;
-        this.try_extend_from_slice(slice)?;
-        Ok(this)
+        if slice.is_empty() {
+            Ok(Self::new())
+        } else {
+            let mut this = Self::with_reserved(round_usize_up_to_host_pages(slice.len()))?;
+            this.try_extend_from_slice(slice)?;
+            Ok(this)
+        } 
     }
 
     pub fn reserve(&self) -> usize {
