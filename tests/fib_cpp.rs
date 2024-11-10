@@ -11,7 +11,7 @@ fn main() {
 
     // instantiate & define the fib_cpp module
     {
-        let module = Module::from_str(
+        let module = Module::from_wat(
             &engine,
             &mut validator,
             include_str!("./fib_cpp.wat"),
@@ -35,7 +35,7 @@ fn main() {
 
     // instantiate the test module
     {
-        let module = Module::from_str(
+        let module = Module::from_wat(
             &engine,
             &mut validator,
             include_str!("./fib_test.wat"),

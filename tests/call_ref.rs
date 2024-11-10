@@ -15,5 +15,5 @@ fn main() {
     let engine = Engine::default();
     let mut validator = Validator::new();
 
-    let _module = Module::from_str(&engine, &mut validator, str).unwrap();
+    let _module = Module::from_wat(&engine, &mut validator, str).unwrap();
 }

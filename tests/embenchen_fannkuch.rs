@@ -6,7 +6,7 @@ fn main() {
     let engine = Engine::default();
     let mut validator = Validator::new();
 
-    let _module = Module::from_str(
+    let _module = Module::from_wat(
         &engine,
         &mut validator,
         include_str!("./embenchen_fannkuch.wat"),
