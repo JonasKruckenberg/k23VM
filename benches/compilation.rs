@@ -13,16 +13,20 @@ fn compile(bytes: &[u8]) {
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Translate");
     group.bench_function("compile fib_cpp", |b| {
-        b.iter(|| compile(black_box(include_bytes!("../tests/fib_cpp.wasm"))))
+        let bytes = wat::parse_str(include_bytes!("../tests/fib_cpp.wat")).unwrap();
+
+        b.iter(|| compile(black_box(&bytes)))
     });
-    // group.bench_function("translate kiwi-editor", |b| {
-    //     b.iter(|| compile(black_box(include_bytes!("../tests/kiwi-editor.wasm"))))
-    // });
+    group.bench_function("translate kiwi-editor", |b| {
+        let bytes = wat::parse_str(include_bytes!("../tests/kiwi-editor.wat")).unwrap();
+
+        b.iter(|| compile(black_box(&bytes)))
+    });
     group.bench_function("compile embenchen_fannkuch", |b| {
         b.iter(|| {
-            compile(black_box(include_bytes!(
-                "../tests/embenchen_fannkuch.wasm"
-            )))
+            let bytes = wat::parse_str(include_bytes!("../tests/embenchen_fannkuch.wat")).unwrap();
+
+            compile(black_box(&bytes))
         })
     });
 }
