@@ -33,7 +33,7 @@ pub unsafe fn ensure_signal_handlers_are_registered() {
             handler.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER | libc::SA_ONSTACK;
             handler.sa_sigaction = trap_handler as usize;
             libc::sigemptyset(&mut handler.sa_mask);
-            assert_ne!(
+            assert_eq!(
                 libc::sigaction(signal, &handler, slot),
                 0i32,
                 "unable to install signal handler"
