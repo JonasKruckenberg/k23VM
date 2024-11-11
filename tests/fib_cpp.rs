@@ -46,6 +46,7 @@ fn main() {
         instance.debug_vmctx(&store);
 
         let func = instance.get_func(&mut store, "fib_test").unwrap();
-        func.call(&mut store, &[], &mut []).unwrap();
+        // TODO replace with checked
+        unsafe { func.call_unchecked(&mut store, &[], &mut []).unwrap(); }
     }
 }

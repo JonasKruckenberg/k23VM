@@ -526,7 +526,8 @@ impl WastContext {
         let ty = ty.as_wasm_func_type();
         let mut results = vec![Val::I32(0); ty.results.len()];
 
-        match func.call(&mut self.store, &values, &mut results) {
+        // TODO replace with safe
+        match unsafe { func.call_unchecked(&mut self.store, &values, &mut results) } {
             Ok(()) => Ok(Outcome::Ok(results)),
             Err(e) => Ok(Outcome::Trap(e.into())),
         }
