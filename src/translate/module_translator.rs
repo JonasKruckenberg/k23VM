@@ -187,10 +187,6 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         Ok(())
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "incrementing escaped counter should not overflow because it is checked by validation"
-    )]
     fn flag_func_as_escaped(&mut self, func_index: FuncIndex) {
         let ty = &mut self.result.module.functions[func_index];
         if ty.is_escaping() {
@@ -204,10 +200,6 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     #[expect(
         clippy::needless_pass_by_value,
         reason = "translate_ methods consume their readers"
-    )]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "index addition should not overflow because it is checked by validation"
     )]
     fn translate_type_section(&mut self, types: TypeSectionReader) {
         let count = types.count();
@@ -249,10 +241,6 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         }
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "incrementing imported_ counters should not overflow because it is checked by validation"
-    )]
     fn translate_import_section(
         &mut self,
         imports: ImportSectionReader<'data>,

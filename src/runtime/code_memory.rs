@@ -49,10 +49,6 @@ impl CodeMemory {
         unsafe { self.mmap.slice(0..self.len) }
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "FIXME: text offset additions *should* be fine, but validate and remove"
-    )]
     pub fn resolve_function_loc(&self, func_loc: FunctionLoc) -> usize {
         let text_range = {
             let r = self.text().as_ptr_range();

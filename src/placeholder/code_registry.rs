@@ -34,10 +34,6 @@ pub fn lookup_code(pc: usize) -> Option<(Arc<CodeMemory>, usize)> {
 ///
 /// This is used by trap handling to determine which region of code a faulting
 /// address.
-#[expect(
-    clippy::arithmetic_side_effects,
-    reason = "ptr and length are taken from the slice and can't overflow"
-)]
 pub fn register_code(code: &Arc<CodeMemory>) {
     let text = code.text();
     if text.is_empty() {

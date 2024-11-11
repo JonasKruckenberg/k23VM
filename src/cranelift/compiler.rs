@@ -336,7 +336,7 @@ impl FunctionCompiler<'_> {
             compiled_function.metadata_mut().start_srcloc =
                 FilePos::new(u32::try_from(offset).unwrap());
             compiled_function.metadata_mut().end_srcloc =
-                FilePos::new(u32::try_from(offset.wrapping_add(len)).unwrap());
+                FilePos::new(u32::try_from(offset + len).unwrap());
 
             // TODO
             // let srclocs = compiled_function

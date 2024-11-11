@@ -181,10 +181,6 @@ pub trait InstanceAllocator {
         clippy::type_complexity,
         reason = "TODO clean up the return type and remove"
     )]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "entity counts are checked by validation"
-    )]
     unsafe fn allocate_module(
         &self,
         module: &Module,

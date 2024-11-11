@@ -154,9 +154,7 @@ impl CraneliftMemory {
         let pcc = env.proof_carrying_code();
         // Cannot overflow because we are widening to `u64`.
         // TODO when memory64 is supported this needs to be handles correctly
-        let offset_and_size = u64::from(offset)
-            .checked_add(u64::from(access_size))
-            .unwrap();
+        let offset_and_size = u64::from(offset) + u64::from(access_size);
 
         let host_page_size_log2 = env.target_isa().page_size_align_log2();
         let can_use_virtual_memory = self.page_size_log2 >= host_page_size_log2;
@@ -270,7 +268,7 @@ impl CraneliftMemory {
                     index,
                     offset,
                     self.memory_type
-                        .map(|ty| (ty, self.bound.checked_add(self.offset_guard_size).unwrap())),
+                        .map(|ty| (ty, self.bound + self.offset_guard_size)),
                 ),
             )
         } else {
@@ -443,7 +441,7 @@ impl CraneliftMemory {
                         // 64-bit add. TODO: when memory64 is supported here,
                         // `u32::MAX` is no longer true, and we'll need to
                         // handle overflow here.
-                        max_offset: u64::from(u32::MAX).checked_add(u64::from(offset)).unwrap(),
+                        max_offset: u64::from(u32::MAX) + u64::from(offset),
                         nullable: false,
                     });
                 }

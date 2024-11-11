@@ -87,7 +87,7 @@ fn declare_wasm_parameters(
             let local = Variable::new(next_local);
             builder.declare_var(local, param_type.value_type);
             // This is checked by validation to not overflow
-            next_local = next_local.wrapping_add(1);
+            next_local += 1;
 
             let param_value = builder.block_params(entry_block)[i];
             builder.def_var(local, param_value);
@@ -185,7 +185,7 @@ fn declare_locals(
             builder.set_val_label(init, ValueLabel::new(*next_local));
         }
         // This is checked by validation to not overflow
-        *next_local = next_local.wrapping_add(1);
+        *next_local += *next_local + 1;
     }
 }
 

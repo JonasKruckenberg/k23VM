@@ -1,7 +1,3 @@
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "This module has a bunch of critical, but unchecked additions and multiplications."
-)]
 //! ```rust,ignore
 //! struct VMContext {
 //!     magic: u32,

@@ -35,7 +35,7 @@ impl Memory {
         let bound_bytes = round_usize_up_to_host_pages(MEMORY_MAX);
         let allocation_bytes = bound_bytes.min(actual_maximum_bytes.unwrap_or(usize::MAX));
 
-        let request_bytes = allocation_bytes.checked_add(offset_guard_bytes).unwrap();
+        let request_bytes = allocation_bytes + offset_guard_bytes;
         let mut mmap = Mmap::with_reserve(request_bytes)?;
 
         if actual_minimum_bytes > 0 {

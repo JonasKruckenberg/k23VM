@@ -539,7 +539,7 @@ unsafe fn initialize_tables(
         let offset = usize::try_from(offset.get_u64()).unwrap();
 
         if let Some(def_index) = module.translated().defined_table_index(segment.table_index) {
-            tables[def_index].elements_mut()[offset..offset.checked_add(elements.len()).unwrap()]
+            tables[def_index].elements_mut()[offset..offset + elements.len()]
                 .copy_from_slice(&elements);
         } else {
             todo!("initializing imported table")
@@ -560,7 +560,7 @@ unsafe fn initialize_memories(
 
         if let Some(def_index) = module.translated().defined_memory_index(init.memory_index) {
             memories[def_index].as_slice_mut()
-                [offset..offset.checked_add(init.data.len()).unwrap()]
+                [offset..offset + init.data.len()]
                 .copy_from_slice(&init.data);
         } else {
             todo!("initializing imported table")

@@ -137,11 +137,6 @@ impl ModuleTypesBuilder {
     }
 
     /// Start defining a new recursion group.
-    // TODO audit index arithmetic and make overflow behavior explicit
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "canonicalization involves a bunch of raw index arithmetic, which *should* never overflow."
-    )]
     fn start_rec_group(
         &mut self,
         validator_types: wasmparser::types::TypesRef<'_>,

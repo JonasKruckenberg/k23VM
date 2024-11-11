@@ -1,9 +1,3 @@
-// TODO audit index arithmetic and make overflow behavior explicit
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "canonicalization involves a bunch of raw index arithmetic, which *should* never overflow."
-)]
-
 use crate::indices::{
     CanonicalizedTypeIndex, ModuleInternedTypeIndex, RecGroupRelativeTypeIndex, VMSharedTypeIndex,
 };
@@ -581,9 +575,7 @@ impl Borrow<WasmRecGroup> for RecGroupEntry {
 impl RecGroupEntry {
     fn incr_ref_count(&self, why: &str) {
         let old_count = self.0.registrations.fetch_add(1, Ordering::AcqRel);
-        let new_count = old_count
-            .checked_add(1)
-            .expect("RecGroupEntry registrations overflow");
+        let new_count = old_count + 1;
         tracing::trace!(
             "increment registration count for {self:?} (registrations -> {new_count}): {why}",
         );
@@ -592,10 +584,7 @@ impl RecGroupEntry {
     #[must_use = "caller must remove entry from registry if `decref` returns `true`"]
     fn decr_ref_count(&self, why: &str) -> bool {
         let old_count = self.0.registrations.fetch_sub(1, Ordering::AcqRel);
-        let new_count = old_count
-            .checked_sub(1)
-            .expect("RecGroupEntry registrations underflow");
-
+        let new_count = old_count - 1;
         tracing::trace!(
             "decrement registration count for {self:?} (registrations -> {new_count}): {why}",
         );

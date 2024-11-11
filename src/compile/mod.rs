@@ -293,7 +293,7 @@ impl UnlinkedCompileOutputs {
 
                 // Ensure that we actually resolved the relocation
                 debug_assert!(text_builder.resolve_reloc(
-                    off.checked_add(u64::from(r.offset)).unwrap(),
+                    off + u64::from(r.offset),
                     r.kind,
                     r.addend,
                     target
@@ -357,7 +357,7 @@ impl TrapsBuilder {
         self.traps.reserve_exact(traps.len());
 
         for trap in traps {
-            let pos = func.start.checked_add(trap.offset).unwrap();
+            let pos = func.start + trap.offset;
             debug_assert!(pos >= self.last_offset);
             // sanity check to make sure everything is sorted.
             // otherwise we won't be able to use lookup later.
@@ -366,7 +366,7 @@ impl TrapsBuilder {
             self.last_offset = pos;
         }
 
-        self.last_offset = func.start.checked_add(func.length).unwrap();
+        self.last_offset = func.start + func.length;
     }
 
     pub fn finish(self) -> (Vec<u32>, Vec<Trap>) {

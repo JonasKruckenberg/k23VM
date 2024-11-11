@@ -59,7 +59,7 @@ impl Iterator for BlockTypeParamsOrReturns<'_> {
             }
             BlockTypeParamsOrReturns::Many(slice, offset) => {
                 let val = *slice.get(*offset)?;
-                *offset = offset.wrapping_add(1);
+                *offset += 1;
                 Some(val)
             }
         }

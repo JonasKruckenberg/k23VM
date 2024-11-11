@@ -161,7 +161,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
         let ptr_size = self.pointer_type().bytes();
         match &mut func.memory_types[memtype] {
             ir::MemoryTypeData::Struct { size, fields } => {
-                *size = cmp::max(*size, offset.checked_add(ptr_size).unwrap().into());
+                *size = cmp::max(*size, u64::from(offset + ptr_size));
                 fields.push(ir::MemoryTypeField {
                     ty: self.pointer_type(),
                     offset: offset.into(),
@@ -1233,7 +1233,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         callee: FuncRef,
         call_args: &[Value],
     ) -> Inst {
-        let mut real_call_args = Vec::with_capacity(call_args.len().wrapping_add(2));
+        let mut real_call_args = Vec::with_capacity(call_args.len() +2);
         let caller_vmctx = self
             .builder
             .func
@@ -1499,7 +1499,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         callee_vmctx: Value,
         call_args: &[Value],
     ) -> Inst {
-        let mut real_call_args = Vec::with_capacity(call_args.len().wrapping_add(2));
+        let mut real_call_args = Vec::with_capacity(call_args.len() + 2);
         let caller_vmctx = self
             .builder
             .func

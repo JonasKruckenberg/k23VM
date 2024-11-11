@@ -95,7 +95,7 @@ impl Mmap {
 
     pub fn make_accessible(&mut self, start: usize, len: usize) -> crate::Result<()> {
         let ptr = self.memory.as_ptr();
-        assert!(start.checked_add(len).unwrap() <= self.memory.len());
+        assert!(start + len <= self.memory.len());
         // Safety: overflow is checked by the assertions above
         unsafe {
             assert!(

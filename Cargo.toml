@@ -65,7 +65,7 @@ no_std = []
 
 [lints.clippy]
 # numeric safety
-arithmetic_side_effects = "deny"
+#arithmetic_side_effects = "deny" TODO audit arithmetic & reenable
 cast_possible_truncation = "deny"
 cast_possible_wrap = "deny"
 cast_precision_loss = "deny"

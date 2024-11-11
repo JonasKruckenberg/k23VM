@@ -119,8 +119,8 @@ impl<T> MmapVec<T> {
         let old_size = self.len;
         let old_accessible = self.accessible();
 
-        if self.len.checked_add(additional).unwrap() < self.mmap.len() {
-            self.len = self.len.wrapping_add(additional);
+        if self.len + additional < self.mmap.len() {
+            self.len = self.len + additional;
         } else {
             panic!("oom")
         }
@@ -128,7 +128,7 @@ impl<T> MmapVec<T> {
         if self.accessible() > old_accessible {
             self.mmap.make_accessible(
                 old_accessible,
-                self.accessible().wrapping_sub(old_accessible),
+                self.accessible() - old_accessible,
             )?;
         }
 

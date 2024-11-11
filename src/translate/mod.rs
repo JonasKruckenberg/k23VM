@@ -109,13 +109,11 @@ pub struct TranslatedModule {
 
 impl TranslatedModule {
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn func_index(&self, index: DefinedFuncIndex) -> FuncIndex {
         FuncIndex::from_u32(self.num_imported_functions + index.as_u32())
     }
 
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_func_index(&self, index: FuncIndex) -> Option<DefinedFuncIndex> {
         if self.is_imported_func(index) {
             None
@@ -132,13 +130,11 @@ impl TranslatedModule {
     }
 
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn table_index(&self, index: DefinedTableIndex) -> TableIndex {
         TableIndex::from_u32(self.num_imported_tables + index.as_u32())
     }
 
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_table_index(&self, index: TableIndex) -> Option<DefinedTableIndex> {
         if self.is_imported_table(index) {
             None
@@ -155,7 +151,6 @@ impl TranslatedModule {
     }
 
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_memory_index(&self, index: MemoryIndex) -> Option<DefinedMemoryIndex> {
         if self.is_imported_memory(index) {
             None
@@ -172,13 +167,11 @@ impl TranslatedModule {
     }
 
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn global_index(&self, index: DefinedGlobalIndex) -> GlobalIndex {
         GlobalIndex::from_u32(self.num_imported_globals + index.as_u32())
     }
 
     #[inline]
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_global_index(&self, index: GlobalIndex) -> Option<DefinedGlobalIndex> {
         if self.is_imported_global(index) {
             None
@@ -206,15 +199,12 @@ impl TranslatedModule {
     pub fn num_imported_globals(&self) -> u32 {
         self.num_imported_globals
     }
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn num_defined_tables(&self) -> u32 {
         self.num_tables() - self.num_imported_tables
     }
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn num_defined_memories(&self) -> u32 {
         self.num_memories() - self.num_imported_memories
     }
-    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn num_defined_globals(&self) -> u32 {
         self.num_globals() - self.num_imported_globals
     }
@@ -411,7 +401,7 @@ impl MemoryDesc {
             // the kernel fit in a single Wasm page of linear memory". Shouldn't
             // ever actually be possible but it provides a number to serve as an
             // effective maximum.
-            0_u64.wrapping_sub(self.page_size())
+            0_u64 - self.page_size()
         } else {
             WASM32_MAX_SIZE
         }
