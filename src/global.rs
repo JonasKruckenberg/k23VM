@@ -30,7 +30,7 @@ impl Global {
         Self(store.push_global(export))
     }
 
-    pub(crate) fn comes_from_same_store(&self, store: &Store) -> bool {
+    pub(crate) fn comes_from_same_store(self, store: &Store) -> bool {
         store.has_global(self.0)
     }
 }

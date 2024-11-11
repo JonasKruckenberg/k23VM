@@ -45,6 +45,10 @@ impl Linker {
     }
 
     /// Alias all exports of `module` under the name `as_module`.
+    ///
+    /// # Errors
+    ///
+    /// TODO
     pub fn alias_module(&mut self, module: &str, as_module: &str) -> crate::Result<&mut Self> {
         let module = self.intern_str(module);
         let as_module = self.intern_str(as_module);
@@ -67,6 +71,10 @@ impl Linker {
     }
 
     /// Define all exports of the provided `instance` under the module name `module_name`.
+    ///
+    /// # Errors
+    ///
+    /// TODO
     pub fn define_instance(
         &mut self,
         store: &mut Store,
@@ -91,6 +99,14 @@ impl Linker {
     /// on to `Instance::new_unchecked` for instantiation.
     ///
     /// Each import of module will be looked up in this Linker and must have previously been defined.
+    ///
+    /// # Errors
+    ///
+    /// TODO
+    ///
+    /// # Panics
+    ///
+    /// TODO
     pub fn instantiate(
         &self,
         store: &mut Store,
@@ -110,28 +126,32 @@ impl Linker {
 
             match (def, &import.ty) {
                 (Extern::Func(func), EntityType::Function(_ty)) => {
-                    imports.functions.push(func.as_vmfunction_import(store))
+                    imports.functions.push(func.as_vmfunction_import(store));
                 }
                 (Extern::Table(table), EntityType::Table(_ty)) => {
-                    imports.tables.push(table.as_vmtable_import(store))
+                    imports.tables.push(table.as_vmtable_import(store));
                 }
                 (Extern::Memory(memory), EntityType::Memory(_ty)) => {
-                    imports.memories.push(memory.as_vmmemory_import(store))
+                    imports.memories.push(memory.as_vmmemory_import(store));
                 }
                 (Extern::Global(global), EntityType::Global(_ty)) => {
-                    imports.globals.push(global.as_vmglobal_import(store))
+                    imports.globals.push(global.as_vmglobal_import(store));
                 }
                 _ => panic!("mismatched import type"),
             }
         }
 
+        // Safety: we have typechecked the imports above.
         unsafe { Instance::new_unchecked(store, alloc, const_eval, module.clone(), imports) }
     }
 
     fn insert(&mut self, key: ImportKey, item: Extern) -> crate::Result<()> {
         match self.map.entry(key) {
             Entry::Occupied(_) => {
-                panic!("import defined twice");
+                return Err(Error::AlreadyDefined {
+                    module: self.strings[key.module].to_string(),
+                    field: self.strings[key.name].to_string(),
+                });
             }
             Entry::Vacant(v) => {
                 v.insert(item);
@@ -144,7 +164,7 @@ impl Linker {
     fn import_key(&mut self, module: &str, name: Option<&str>) -> ImportKey {
         ImportKey {
             module: self.intern_str(module),
-            name: name.map(|name| self.intern_str(name)).unwrap_or(usize::MAX),
+            name: name.map_or(usize::MAX, |name| self.intern_str(name)),
         }
     }
 

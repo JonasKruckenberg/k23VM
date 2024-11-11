@@ -45,6 +45,10 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     /// Translate raw WASM bytes into a `ModuleTranslation`.
     ///
     /// Returns the translation along with it's interned types.
+    ///
+    /// # Errors
+    ///
+    /// TODO
     pub fn translate(
         mut self,
         data: &'data [u8],
@@ -57,10 +61,18 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         }
 
         self.validator.reset();
+
+        debug_assert!(self.result.module.num_tables() >= self.result.module.num_imported_tables);
+        debug_assert!(
+            self.result.module.num_memories() >= self.result.module.num_imported_memories
+        );
+        debug_assert!(self.result.module.num_globals() >= self.result.module.num_imported_globals);
+
         Ok((self.result, self.types.finish()))
     }
 
     /// Translates a single payload (essentially a section) of a WASM module.
+    #[expect(clippy::too_many_lines, reason = "big match statement")]
     fn translate_payload(&mut self, payload: Payload<'data>) -> crate::Result<()> {
         match payload {
             Payload::Version {
@@ -72,7 +84,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             }
             Payload::TypeSection(types) => {
                 self.validator.type_section(&types)?;
-                self.translate_type_section(types)?;
+                self.translate_type_section(types);
             }
             Payload::ImportSection(imports) => {
                 self.validator.import_section(&imports)?;
@@ -175,6 +187,10 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         Ok(())
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "incrementing escaped counter should not overflow because it is checked by validation"
+    )]
     fn flag_func_as_escaped(&mut self, func_index: FuncIndex) {
         let ty = &mut self.result.module.functions[func_index];
         if ty.is_escaping() {
@@ -185,7 +201,15 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         self.result.module.num_escaped_functions += 1;
     }
 
-    fn translate_type_section(&mut self, types: TypeSectionReader) -> crate::Result<()> {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "translate_ methods consume their readers"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "index addition should not overflow because it is checked by validation"
+    )]
+    fn translate_type_section(&mut self, types: TypeSectionReader) {
         let count = types.count();
         self.result
             .module
@@ -211,7 +235,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
             let interned =
                 self.types
-                    .intern_rec_group(&self.result.module, validator_types, rec_group_id)?;
+                    .intern_rec_group(&self.result.module, validator_types, rec_group_id);
 
             let elems = self.types.types.rec_group_elements(interned);
             let len = elems.len();
@@ -223,9 +247,12 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             // Advance `type_index` to the start of the next rec group.
             type_index += u32::try_from(len).unwrap();
         }
-        Ok(())
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "incrementing imported_ counters should not overflow because it is checked by validation"
+    )]
     fn translate_import_section(
         &mut self,
         imports: ImportSectionReader<'data>,
@@ -240,13 +267,14 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
 
             let index = match import.ty {
                 TypeRef::Func(index) => {
+                    self.result.module.num_imported_functions += 1;
+
                     let signature = TypeIndex::from_u32(index);
                     let interned_index = self.result.module.types[signature];
                     self.result.module.functions.push(FunctionDesc {
                         signature,
                         func_ref: FuncRefIndex::reserved_value(),
                     });
-                    self.result.module.num_imported_functions += 1;
                     EntityType::Function(CanonicalizedTypeIndex::Module(interned_index))
                 }
                 TypeRef::Table(ty) => {
@@ -261,6 +289,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                 }
                 TypeRef::Memory(ty) => {
                     self.result.module.num_imported_memories += 1;
+
                     let memory = MemoryDesc::from_wasmparser(ty);
                     self.result.module.memories.push(memory.clone());
                     EntityType::Memory(memory)
@@ -272,7 +301,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         WasmparserTypeConverter::new(&self.types.types, &self.result.module);
 
                     let global = GlobalDesc {
-                        content_type: ty_convert.convert_val_type(&ty.content_type),
+                        content_type: ty_convert.convert_val_type(ty.content_type),
                         mutable: ty.mutable,
                         shared: ty.shared,
                     };
@@ -336,7 +365,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             let init = match table.init {
                 TableInit::RefNull => TableInitialValue::RefNull,
                 TableInit::Expr(expr) => {
-                    let (expr, escaped) = ConstExpr::from_wasmparser(expr)?;
+                    let (expr, escaped) = ConstExpr::from_wasmparser(&expr)?;
                     for func in escaped {
                         self.flag_func_as_escaped(func);
                     }
@@ -372,6 +401,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         Ok(())
     }
 
+    #[expect(clippy::unused_self, reason = "TODO stub")]
     fn parse_tag_section(&self, _tags: TagSectionReader<'data>) -> crate::Result<()> {
         Err(wasm_unsupported!("exception handling"))
     }
@@ -395,12 +425,12 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
             let ty_convert = WasmparserTypeConverter::new(&self.types.types, &self.result.module);
 
             self.result.module.globals.push(GlobalDesc {
-                content_type: ty_convert.convert_val_type(&global.ty.content_type),
+                content_type: ty_convert.convert_val_type(global.ty.content_type),
                 mutable: global.ty.mutable,
                 shared: global.ty.shared,
             });
 
-            let (init_expr, escaped) = ConstExpr::from_wasmparser(global.init_expr)?;
+            let (init_expr, escaped) = ConstExpr::from_wasmparser(&global.init_expr)?;
             for func in escaped {
                 self.flag_func_as_escaped(func);
             }
@@ -423,7 +453,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     self.result
                         .debug_info
                         .names
-                        .func_names
+                        .funcs
                         .insert(index, export.name);
                     EntityIndex::Function(index)
                 }
@@ -432,7 +462,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     self.result
                         .debug_info
                         .names
-                        .table_names
+                        .tables
                         .insert(index, export.name);
                     EntityIndex::Table(index)
                 }
@@ -441,17 +471,13 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     self.result
                         .debug_info
                         .names
-                        .memory_names
+                        .memories
                         .insert(index, export.name);
                     EntityIndex::Memory(index)
                 }
                 ExternalKind::Tag => {
                     let index = TagIndex::from_u32(export.index);
-                    self.result
-                        .debug_info
-                        .names
-                        .tag_names
-                        .insert(index, export.name);
+                    self.result.debug_info.names.tags.insert(index, export.name);
                     EntityIndex::Tag(index)
                 }
                 ExternalKind::Global => {
@@ -459,7 +485,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     self.result
                         .debug_info
                         .names
-                        .global_names
+                        .globals
                         .insert(index, export.name);
                     EntityIndex::Global(index)
                 }
@@ -480,7 +506,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     ) -> crate::Result<()> {
         for (elem_index, element) in elements.into_iter().enumerate() {
             let element = element?;
-            let elem_index = ElemIndex::from_u32(elem_index as u32);
+            let elem_index = ElemIndex::from_u32(u32::try_from(elem_index).unwrap());
 
             let elements = match element.items {
                 ElementItems::Functions(funcs) => {
@@ -494,7 +520,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     let mut out = Vec::with_capacity(exprs.count() as usize);
 
                     for expr in exprs {
-                        let (expr, escaped) = ConstExpr::from_wasmparser(expr?)?;
+                        let (expr, escaped) = ConstExpr::from_wasmparser(&expr?)?;
                         for func in escaped {
                             self.flag_func_as_escaped(func);
                         }
@@ -510,7 +536,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     offset_expr,
                 } => {
                     let table_index = TableIndex::from_u32(table_index.unwrap_or(0));
-                    let (offset, escaped) = ConstExpr::from_wasmparser(offset_expr)?;
+                    let (offset, escaped) = ConstExpr::from_wasmparser(&offset_expr)?;
                     debug_assert!(escaped.is_empty());
 
                     self.result
@@ -543,7 +569,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
     fn translate_data_section(&mut self, section: DataSectionReader<'data>) -> crate::Result<()> {
         for (data_index, entry) in section.into_iter().enumerate() {
             let entry = entry?;
-            let data_index = DataIndex::from_u32(data_index as u32);
+            let data_index = DataIndex::from_u32(u32::try_from(data_index).unwrap());
 
             match entry.kind {
                 DataKind::Active {
@@ -551,7 +577,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     offset_expr,
                 } => {
                     let memory_index = MemoryIndex::from_u32(memory_index);
-                    let (offset, escaped) = ConstExpr::from_wasmparser(offset_expr)?;
+                    let (offset, escaped) = ConstExpr::from_wasmparser(&offset_expr)?;
                     debug_assert!(escaped.is_empty());
 
                     self.result
@@ -617,7 +643,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                 "extended-const" => required_features.insert(WasmFeatures::EXTENDED_CONST),
                 "multimemory" => required_features.insert(WasmFeatures::MULTI_MEMORY),
                 "shared-everything" => {
-                    required_features.insert(WasmFeatures::SHARED_EVERYTHING_THREADS)
+                    required_features.insert(WasmFeatures::SHARED_EVERYTHING_THREADS);
                 }
                 _ => tracing::warn!("unknown required WASM feature `{feature}`"),
             }
@@ -626,6 +652,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
         self.result.required_features = required_features;
     }
 
+    #[expect(clippy::too_many_lines, reason = "big match statement")]
     fn translate_name_section(&mut self, reader: NameSectionReader<'data>) -> crate::Result<()> {
         for subsection in reader {
             fn for_each_direct_name<'data>(
@@ -635,7 +662,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                 for name in names {
                     let name = name?;
 
-                    f(name.index, name.name)
+                    f(name.index, name.name);
                 }
 
                 Ok(())
@@ -653,7 +680,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     for name in name.names {
                         let name = name?;
 
-                        f1(&mut result, name.index, name.name)
+                        f1(&mut result, name.index, name.name);
                     }
 
                     f2(result, name.index);
@@ -670,11 +697,11 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                     for_each_direct_name(names, |idx, name| {
                         // Skip this naming if it's naming a function that
                         // doesn't actually exist.
-                        if (idx as usize) < self.result.module.functions.len() {
+                        if idx < self.result.module.num_functions() {
                             self.result
                                 .debug_info
                                 .names
-                                .func_names
+                                .funcs
                                 .insert(FuncIndex::from_u32(idx), name);
                         }
                     })?;
@@ -688,11 +715,11 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         |result, idx| {
                             // Skip this naming if it's naming a function that
                             // doesn't actually exist.
-                            if (idx as usize) < self.result.module.functions.len() {
+                            if idx < self.result.module.num_functions() {
                                 self.result
                                     .debug_info
                                     .names
-                                    .locals_names
+                                    .locals
                                     .insert(FuncIndex::from_u32(idx), result);
                             }
                         },
@@ -703,7 +730,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .global_names
+                            .globals
                             .insert(GlobalIndex::from_u32(idx), name);
                     })?;
                 }
@@ -712,7 +739,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .data_names
+                            .data
                             .insert(DataIndex::from_u32(idx), name);
                     })?;
                 }
@@ -721,7 +748,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .type_names
+                            .types
                             .insert(TypeIndex::from_u32(idx), name);
                     })?;
                 }
@@ -734,11 +761,11 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         |result, idx| {
                             // Skip this naming if it's naming a function that
                             // doesn't actually exist.
-                            if (idx as usize) < self.result.module.functions.len() {
+                            if idx < self.result.module.num_functions() {
                                 self.result
                                     .debug_info
                                     .names
-                                    .labels_names
+                                    .labels
                                     .insert(FuncIndex::from_u32(idx), result);
                             }
                         },
@@ -749,7 +776,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .table_names
+                            .tables
                             .insert(TableIndex::from_u32(idx), name);
                     })?;
                 }
@@ -758,7 +785,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .memory_names
+                            .memories
                             .insert(MemoryIndex::from_u32(idx), name);
                     })?;
                 }
@@ -767,7 +794,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .element_names
+                            .elements
                             .insert(ElemIndex::from_u32(idx), name);
                     })?;
                 }
@@ -777,7 +804,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         |result, idx, name| {
                             // Skip this naming if it's naming a function that
                             // doesn't actually exist.
-                            if (idx as usize) < self.result.module.functions.len() {
+                            if idx < self.result.module.num_functions() {
                                 result.insert(FieldIndex::from_u32(idx), name);
                             }
                         },
@@ -785,7 +812,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                             self.result
                                 .debug_info
                                 .names
-                                .fields_names
+                                .fields
                                 .insert(FuncIndex::from_u32(idx), result);
                         },
                     )?;
@@ -795,7 +822,7 @@ impl<'a, 'data> ModuleTranslator<'a, 'data> {
                         self.result
                             .debug_info
                             .names
-                            .tag_names
+                            .tags
                             .insert(TagIndex::from_u32(idx), name);
                     })?;
                 }

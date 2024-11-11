@@ -31,7 +31,7 @@ impl Default for Engine {
 
         Self(Arc::new(EngineInner {
             compiler: CraneliftCompiler::new(target_isa),
-            type_registry: Default::default(),
+            type_registry: TypeRegistry::default(),
         }))
     }
 }
@@ -44,5 +44,9 @@ impl Engine {
     /// Returns the type registry of this engine, used to canonicalize types.
     pub fn type_registry(&self) -> &TypeRegistry {
         &self.0.type_registry
+    }
+
+    pub(crate) fn same(lhs: &Engine, rhs: &Engine) -> bool {
+        Arc::ptr_eq(&lhs.0, &rhs.0)
     }
 }

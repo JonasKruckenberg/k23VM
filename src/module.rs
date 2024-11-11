@@ -33,6 +33,10 @@ impl Module {
     /// Creates a new module from the given WebAssembly text format.
     ///
     /// This will parse, translate and compile the module and is the first step in Wasm execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the WebAssembly text file is malformed, or compilation fails.
     pub fn from_wat(engine: &Engine, validator: &mut Validator, str: &str) -> crate::Result<Self> {
         let bytes = wat::parse_str(str)?;
         Self::from_bytes(engine, validator, &bytes)
@@ -41,6 +45,14 @@ impl Module {
     /// Creates a new module from the given WebAssembly bytes.
     ///
     /// This will parse, translate and compile the module and is the first step in Wasm execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the WebAssembly module is malformed, or compilation fails.
+    ///
+    /// # Panics
+    ///
+    /// TODO
     pub fn from_bytes(
         engine: &Engine,
         validator: &mut Validator,
@@ -57,7 +69,7 @@ impl Module {
 
         tracing::debug!("Applying static relocations...");
         let (code, function_info, (trap_offsets, traps)) =
-            unlinked_outputs.link_and_finish(engine, &translation.module)?;
+            unlinked_outputs.link_and_finish(engine, &translation.module);
 
         let type_collection = engine.type_registry().register_module_types(engine, types);
 

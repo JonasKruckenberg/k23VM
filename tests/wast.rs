@@ -496,7 +496,9 @@ impl WastContext {
     }
 
     fn register(&mut self, name: Option<&str>, as_name: &str) -> anyhow::Result<()> {
-        if let Some(name) = name { self.linker.alias_module(name, as_name)? } else {
+        if let Some(name) = name {
+            self.linker.alias_module(name, as_name)?
+        } else {
             let current = self.current.as_ref().context("no previous instance")?;
             self.linker
                 .define_instance(&mut self.store, as_name, *current)?

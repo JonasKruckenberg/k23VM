@@ -44,49 +44,48 @@ impl CraneliftMemory {
         access_size: u8,
         memarg: &MemArg,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<Reachability<(MemFlags, Value, Value)>> {
-        let addr = match u32::try_from(memarg.offset) {
+    ) -> Reachability<(MemFlags, Value, Value)> {
+        let addr = if let Ok(offset) = u32::try_from(memarg.offset) {
             // If our offset fits within a u32, then we can place it into the
             // offset immediate of the `heap_addr` instruction.
-            Ok(offset) => {
-                self.bounds_check_and_compute_addr(builder, index, offset, access_size, env)?
-            }
+            self.bounds_check_and_compute_addr(builder, index, offset, access_size, env)
+        } else {
             // If the offset doesn't fit within a u32, then we can't pass it
             // directly into `heap_addr`.
-            Err(_) => {
-                let offset = builder.ins().iconst(self.index_type, memarg.offset as i64);
-                let adjusted_index =
-                    builder
-                        .ins()
-                        .uadd_overflow_trap(index, offset, TrapCode::HEAP_OUT_OF_BOUNDS);
-                self.bounds_check_and_compute_addr(builder, adjusted_index, 0, access_size, env)?
+            let offset = builder
+                .ins()
+                .iconst(self.index_type, i64::try_from(memarg.offset).unwrap());
+            let adjusted_index =
+                builder
+                    .ins()
+                    .uadd_overflow_trap(index, offset, TrapCode::HEAP_OUT_OF_BOUNDS);
+            self.bounds_check_and_compute_addr(builder, adjusted_index, 0, access_size, env)
+        };
+
+        match addr {
+            Reachability::Unreachable => Reachability::Unreachable,
+            Reachability::Reachable(addr) => {
+                // Note that we don't set `is_aligned` here, even if the load instruction's
+                // alignment immediate may say it's aligned, because WebAssembly's
+                // immediate field is just a hint, while Cranelift's aligned flag needs a
+                // guarantee. WebAssembly memory accesses are always little-endian.
+                let mut flags = MemFlags::new();
+                flags.set_endianness(ir::Endianness::Little);
+
+                if self.memory_type.is_some() {
+                    // Proof-carrying code is enabled; check this memory access.
+                    flags.set_checked();
+                }
+
+                // The access occurs to the `heap` disjoint category of abstract
+                // state. This may allow alias analysis to merge redundant loads,
+                // etc. when heap accesses occur interleaved with other (table,
+                // vmctx, stack) accesses.
+                flags.set_alias_region(Some(ir::AliasRegion::Heap));
+
+                Reachability::Reachable((flags, index, addr))
             }
-        };
-
-        let addr = match addr {
-            Reachability::Unreachable => return Ok(Reachability::Unreachable),
-            Reachability::Reachable(a) => a,
-        };
-
-        // Note that we don't set `is_aligned` here, even if the load instruction's
-        // alignment immediate may say it's aligned, because WebAssembly's
-        // immediate field is just a hint, while Cranelift's aligned flag needs a
-        // guarantee. WebAssembly memory accesses are always little-endian.
-        let mut flags = MemFlags::new();
-        flags.set_endianness(ir::Endianness::Little);
-
-        if self.memory_type.is_some() {
-            // Proof-carrying code is enabled; check this memory access.
-            flags.set_checked();
         }
-
-        // The access occurs to the `heap` disjoint category of abstract
-        // state. This may allow alias analysis to merge redundant loads,
-        // etc. when heap accesses occur interleaved with other (table,
-        // vmctx, stack) accesses.
-        flags.set_alias_region(Some(ir::AliasRegion::Heap));
-
-        Ok(Reachability::Reachable((flags, index, addr)))
     }
 
     /// Like `prepare_addr` but for atomic accesses.
@@ -99,7 +98,7 @@ impl CraneliftMemory {
         loaded_bytes: u8,
         memarg: &MemArg,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<Reachability<(MemFlags, Value, Value)>> {
+    ) -> Reachability<(MemFlags, Value, Value)> {
         // Atomic addresses must all be aligned correctly, and for now we check
         // alignment before we check out-of-bounds-ness. The order of this check may
         // need to be updated depending on the outcome of the official threads
@@ -116,12 +115,13 @@ impl CraneliftMemory {
             } else {
                 builder
                     .ins()
-                    .iadd_imm(index, i64::from(memarg.offset as i32))
+                    .iadd_imm(index, i64::try_from(memarg.offset).unwrap())
             };
             debug_assert!(loaded_bytes.is_power_of_two());
-            let misalignment = builder
-                .ins()
-                .band_imm(effective_addr, i64::from(loaded_bytes - 1));
+            let misalignment = builder.ins().band_imm(
+                effective_addr,
+                i64::from(loaded_bytes.checked_sub(1).unwrap()),
+            );
             let f = builder.ins().icmp_imm(IntCC::NotEqual, misalignment, 0);
             builder.ins().trapnz(f, TRAP_HEAP_MISALIGNED);
         }
@@ -139,7 +139,7 @@ impl CraneliftMemory {
         // Static size of the heap access.
         access_size: u8,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<Reachability<Value>> {
+    ) -> Reachability<Value> {
         let pointer_bit_width = u16::try_from(env.pointer_type().bits()).unwrap();
         let orig_index = index;
         let index = cast_index_to_pointer_ty(
@@ -153,9 +153,11 @@ impl CraneliftMemory {
         let spectre_mitigations_enabled = env.heap_access_spectre_mitigation();
         let pcc = env.proof_carrying_code();
         // Cannot overflow because we are widening to `u64`.
-        let offset_and_size = offset as u64 + access_size as u64;
+        // TODO when memory64 is supported this needs to be handles correctly
+        let offset_and_size = u64::from(offset)
+            .checked_add(u64::from(access_size))
+            .unwrap();
 
-        // TODO what s this and why do we need it??
         let host_page_size_log2 = env.target_isa().page_size_align_log2();
         let can_use_virtual_memory = self.page_size_log2 >= host_page_size_log2;
         assert!(
@@ -201,8 +203,8 @@ impl CraneliftMemory {
                     {
                         builder.func.dfg.facts[result] = Some(Fact::Compare {
                             kind: compare_kind,
-                            lhs: Expr::offset(&Expr::value(orig_index), 0).unwrap(),
-                            rhs: Expr::constant((k as i64).checked_add(0).unwrap()),
+                            lhs: Expr::value(orig_index),
+                            rhs: Expr::constant(i64::try_from(k).unwrap()),
                         });
                     }
                 }
@@ -214,9 +216,13 @@ impl CraneliftMemory {
             //    bound`, since we will end up being out-of-bounds regardless of the
             //    given `index`.
             builder.ins().trap(TrapCode::HEAP_OUT_OF_BOUNDS);
-            Ok(Reachability::Unreachable)
+            Reachability::Unreachable
         } else if self.index_type == ir::types::I32
-            && u64::from(u32::MAX) <= self.bound + self.offset_guard_size - offset_and_size
+            && u64::from(u32::MAX)
+                <= self
+                    .bound
+                    .saturating_add(self.offset_guard_size)
+                    .saturating_add(offset_and_size)
         {
             // 2. Second special case for when we can completely omit explicit
             //    bounds checks for 32-bit static memories.
@@ -257,16 +263,16 @@ impl CraneliftMemory {
             //    within the guard page region, neither of which require emitting an
             //    explicit bounds check.
 
-            Ok(Reachability::Reachable(
+            Reachability::Reachable(
                 self.compute_addr(
                     &mut builder.cursor(),
                     env.pointer_type(),
                     index,
                     offset,
                     self.memory_type
-                        .map(|ty| (ty, self.bound + self.offset_guard_size)),
+                        .map(|ty| (ty, self.bound.checked_add(self.offset_guard_size).unwrap())),
                 ),
-            ))
+            )
         } else {
             // 3. General case for static memories.
             //
@@ -281,10 +287,10 @@ impl CraneliftMemory {
             //    factor in the guard pages here.
             // NB: this subtraction cannot wrap because we didn't hit the first
             // special case.
-            let adjusted_bound = self.bound - offset_and_size;
+            let adjusted_bound = self.bound.checked_sub(offset_and_size).unwrap();
             let adjusted_bound_value = builder
                 .ins()
-                .iconst(env.pointer_type(), adjusted_bound as i64);
+                .iconst(env.pointer_type(), i64::try_from(adjusted_bound).unwrap());
             if pcc {
                 builder.func.dfg.facts[adjusted_bound_value] =
                     Some(Fact::constant(pointer_bit_width, adjusted_bound));
@@ -295,22 +301,19 @@ impl CraneliftMemory {
                 index,
                 adjusted_bound_value,
             );
-            Ok(Reachability::Reachable(
-                self.explicit_check_oob_condition_and_compute_addr(
-                    builder,
-                    env.pointer_type(),
-                    index,
-                    offset,
-                    access_size,
-                    spectre_mitigations_enabled,
-                    self.memory_type.map(|ty| (ty, self.bound)),
-                    oob,
-                ),
+            Reachability::Reachable(self.explicit_check_oob_condition_and_compute_addr(
+                builder,
+                env.pointer_type(),
+                index,
+                offset,
+                access_size,
+                spectre_mitigations_enabled,
+                self.memory_type.map(|ty| (ty, self.bound)),
+                oob,
             ))
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn explicit_check_oob_condition_and_compute_addr(
         &self,
         builder: &mut FunctionBuilder,
@@ -440,7 +443,7 @@ impl CraneliftMemory {
                         // 64-bit add. TODO: when memory64 is supported here,
                         // `u32::MAX` is no longer true, and we'll need to
                         // handle overflow here.
-                        max_offset: u64::from(u32::MAX) + u64::from(offset),
+                        max_offset: u64::from(u32::MAX).checked_add(u64::from(offset)).unwrap(),
                         nullable: false,
                     });
                 }

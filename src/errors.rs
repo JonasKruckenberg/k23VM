@@ -1,9 +1,9 @@
+use crate::translate::EntityType;
 use crate::trap::Trap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
 use cranelift_codegen::CodegenError;
-use crate::translate::EntityType;
 
 /// Convenience macro for creating an `Error::Unsupported` variant.
 #[macro_export]
@@ -11,8 +11,8 @@ macro_rules! wasm_unsupported {
     ($($arg:tt)*) => { $crate::Error::Unsupported(::alloc::format!($($arg)*)) }
 }
 
+/// Error type for the crate
 #[derive(Debug)]
-#[allow(missing_docs)]
 pub enum Error {
     /// The input WebAssembly code is invalid.
     InvalidWebAssembly {
@@ -23,50 +23,82 @@ pub enum Error {
     },
     /// A required import was not provided.
     MissingImport {
+        /// The module name of the import.
         module: String,
+        /// The field name of the import.
         field: String,
-        type_: EntityType
+        /// The type of the import.
+        type_: EntityType,
     },
     /// The WebAssembly code used an unsupported feature.
     Unsupported(String),
     /// Failed to compile a function.
-    Cranelift { func_name: String, message: String },
+    Cranelift {
+        /// The name of the function that failed to compile.
+        func_name: String,
+        /// A human-readable description of the error.
+        message: String,
+    },
     /// Failed to parse DWARF debug information.
     Gimli(gimli::Error),
     /// Failed to parse a wat file.
     Wat(wat::Error),
     /// A WebAssembly trap ocurred.
-    Trap { trap: Trap, message: String },
+    Trap {
+        /// The trap that occurred.
+        trap: Trap,
+        /// A human-readable description of the trap.
+        message: String,
+    },
+    /// Memory mapping failed
+    MmapFailed,
+    /// The name is already defined.
+    AlreadyDefined {
+        /// The defined module name.
+        module: String,
+        /// The defined field name.
+        field: String,
+    },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::InvalidWebAssembly { message, offset } => {
+            Self::InvalidWebAssembly { message, offset } => {
                 f.write_fmt(format_args!("invalid WASM input at {offset}: {message}"))
             }
-            Error::MissingImport { module, field, type_ } => {
+            Self::MissingImport {
+                module,
+                field,
+                type_,
+            } => {
                 let type_ = match type_ {
                     EntityType::Function(_) => "function",
                     EntityType::Table(_) => "table",
                     EntityType::Memory(_) => "memory",
                     EntityType::Global(_) => "global",
                 };
-                f.write_fmt(format_args!("Missing required import {module}::{field} ({type_})"))
-            },
-            Error::Unsupported(feature) => f.write_fmt(format_args!(
+                f.write_fmt(format_args!(
+                    "Missing required import {module}::{field} ({type_})"
+                ))
+            }
+            Self::Unsupported(feature) => f.write_fmt(format_args!(
                 "Feature used by the WebAssembly code is not supported: {feature}"
             )),
-            Error::Cranelift { func_name, message } => f.write_fmt(format_args!(
+            Self::Cranelift { func_name, message } => f.write_fmt(format_args!(
                 "failed to compile function {func_name}: {message}"
             )),
-            Error::Gimli(e) => {
+            Self::Gimli(e) => {
                 f.write_fmt(format_args!("Failed to parse DWARF debug information: {e}"))
             }
-            Error::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
-            Error::Trap { trap, message, .. } => {
+            Self::Wat(e) => f.write_fmt(format_args!("Failed to parse wat: {e}")),
+            Self::Trap { trap, message, .. } => {
                 f.write_fmt(format_args!("{message}. Reason {trap}"))?;
                 Ok(())
+            }
+            Self::MmapFailed => f.write_str("Memory mapping failed"),
+            Self::AlreadyDefined { module, field } => {
+                f.write_fmt(format_args!("Name {module}::{field} is already defined"))
             }
         }
     }

@@ -1,17 +1,20 @@
+use crate::placeholder::host_page_size;
 use crate::utils::usize_is_multiple_of_host_page_size;
+use crate::Error;
 use core::ops::Range;
 use core::ptr::NonNull;
 use core::{ptr, slice};
 use rustix::mm::MprotectFlags;
-use crate::placeholder::host_page_size;
 
 #[derive(Debug)]
 pub struct Mmap {
     memory: NonNull<[u8]>,
 }
 
+// Safety: TODO why is this safe??
 unsafe impl Send for Mmap {}
 
+// Safety: TODO why is this safe??
 unsafe impl Sync for Mmap {}
 
 impl Mmap {
@@ -23,6 +26,7 @@ impl Mmap {
 
     pub fn new(size: usize) -> crate::Result<Self> {
         assert!(usize_is_multiple_of_host_page_size(size));
+        // Safety: we pass a nullptr so the kernel will allocate memory for us.
         let ptr = unsafe {
             rustix::mm::mmap_anonymous(
                 ptr::null_mut(),
@@ -30,8 +34,9 @@ impl Mmap {
                 rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE,
                 rustix::mm::MapFlags::PRIVATE,
             )
-            .unwrap()
+            .map_err(|_| Error::MmapFailed)?
         };
+        // Safety: the previous call ensures the ptr is valid and u8 doesn't have any alignment/validity requirements.
         let memory = unsafe { slice::from_raw_parts_mut(ptr.cast(), size) };
         let memory = NonNull::new(memory).unwrap();
         Ok(Mmap { memory })
@@ -40,6 +45,7 @@ impl Mmap {
     pub fn with_reserve(size: usize) -> crate::Result<Self> {
         assert!(usize_is_multiple_of_host_page_size(size));
         assert!(size > 0);
+        // Safety: we pass a nullptr so the kernel will allocate memory for us.
         let ptr = unsafe {
             rustix::mm::mmap_anonymous(
                 ptr::null_mut(),
@@ -47,9 +53,10 @@ impl Mmap {
                 rustix::mm::ProtFlags::empty(),
                 rustix::mm::MapFlags::PRIVATE,
             )
-            .unwrap()
+            .map_err(|_| Error::MmapFailed)?
         };
 
+        // Safety: the previous call ensures the ptr is valid and u8 doesn't have any alignment/validity requirements.
         let memory = unsafe { slice::from_raw_parts_mut(ptr.cast(), size) };
         let memory = NonNull::new(memory).unwrap();
         Ok(Mmap { memory })
@@ -57,14 +64,14 @@ impl Mmap {
 
     #[inline]
     pub unsafe fn slice(&self, range: Range<usize>) -> &[u8] {
-        assert!(range.start <= range.end);
         assert!(range.end <= self.len());
-        slice::from_raw_parts(self.as_ptr().add(range.start), range.end - range.start)
+        let len = range.end.checked_sub(range.start).unwrap();
+        slice::from_raw_parts(self.as_ptr().add(range.start), len)
     }
     pub unsafe fn slice_mut(&mut self, range: Range<usize>) -> &mut [u8] {
-        assert!(range.start <= range.end);
         assert!(range.end <= self.len());
-        slice::from_raw_parts_mut(self.as_mut_ptr().add(range.start), range.end - range.start)
+        let len = range.end.checked_sub(range.start).unwrap();
+        slice::from_raw_parts_mut(self.as_mut_ptr().add(range.start), len)
     }
     #[inline]
     pub fn as_ptr(&self) -> *const u8 {
@@ -78,6 +85,7 @@ impl Mmap {
 
     #[inline]
     pub fn len(&self) -> usize {
+        // Safety: the constructor ensures that the NonNull is valid.
         unsafe { (*self.memory.as_ptr()).len() }
     }
     #[inline]
@@ -87,44 +95,49 @@ impl Mmap {
 
     pub fn make_accessible(&mut self, start: usize, len: usize) -> crate::Result<()> {
         let ptr = self.memory.as_ptr();
-        assert!(start + len <= self.memory.len());
-        assert!(unsafe {
-            ptr.byte_add(start).cast::<u8>() <= ptr.byte_add(self.memory.len()).cast::<u8>()
-        });
-        assert_eq!(
-            unsafe { ptr.byte_add(start).cast::<u8>() } as usize % host_page_size(),
-            0,
-            "changing of protections isn't page-aligned",
-        );
+        assert!(start.checked_add(len).unwrap() <= self.memory.len());
+        // Safety: overflow is checked by the assertions above
+        unsafe {
+            assert!(
+                ptr.byte_add(start).cast::<u8>() <= ptr.byte_add(self.memory.len()).cast::<u8>()
+            );
 
+            assert_eq!(
+                ptr.byte_add(start).cast::<u8>() as usize % host_page_size(),
+                0,
+                "changing of protections isn't page-aligned",
+            );
+        }
+
+        // Safety: provenance invariant is checked by the assertions above
         unsafe {
             rustix::mm::mprotect(
                 ptr.byte_add(start).cast(),
                 len,
                 MprotectFlags::READ | MprotectFlags::WRITE,
             )
-            .unwrap()
+            .map_err(|_| Error::MmapFailed)?;
         }
 
         Ok(())
     }
 
-    pub unsafe fn make_executable(
+    pub fn make_executable(
         &self,
         range: Range<usize>,
         enable_branch_protection: bool,
     ) -> crate::Result<()> {
         assert!(range.start <= self.len());
         assert!(range.end <= self.len());
-        assert!(range.start <= range.end);
         assert_eq!(
             range.start % host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );
 
-        let base = self.memory.as_ptr().byte_add(range.start).cast();
-        let len = range.end - range.start;
+        // Safety: overflow is checked by the assertions above
+        let base = unsafe { self.memory.as_ptr().byte_add(range.start).cast() };
+        let len = range.end.checked_sub(range.start).unwrap();
 
         let flags = MprotectFlags::READ | MprotectFlags::EXEC;
         let flags = if enable_branch_protection {
@@ -141,25 +154,31 @@ impl Mmap {
             flags
         };
 
-        rustix::mm::mprotect(base, len, flags).unwrap();
+        // Safety: provenance invariant is checked by the assertions above
+        unsafe {
+            rustix::mm::mprotect(base, len, flags).map_err(|_| Error::MmapFailed)?;
+        }
 
         Ok(())
     }
 
-    pub unsafe fn make_readonly(&self, range: Range<usize>) -> crate::Result<()> {
+    pub fn make_readonly(&self, range: Range<usize>) -> crate::Result<()> {
         assert!(range.start <= self.len());
         assert!(range.end <= self.len());
-        assert!(range.start <= range.end);
         assert_eq!(
             range.start % host_page_size(),
             0,
             "changing of protections isn't page-aligned",
         );
 
-        let base = self.memory.as_ptr().byte_add(range.start).cast();
-        let len = range.end - range.start;
+        // Safety: overflow is checked by the assertions above
+        let base = unsafe { self.memory.as_ptr().byte_add(range.start).cast() };
+        let len = range.end.checked_sub(range.start).unwrap();
 
-        rustix::mm::mprotect(base, len, MprotectFlags::READ).unwrap();
+        // Safety: provenance invariant is checked by the assertions above
+        unsafe {
+            rustix::mm::mprotect(base, len, MprotectFlags::READ).map_err(|_| Error::MmapFailed)?;
+        }
 
         Ok(())
     }
@@ -167,6 +186,7 @@ impl Mmap {
 
 impl Drop for Mmap {
     fn drop(&mut self) {
+        // Safety: The rest of the code has to ensure no references to code remain after this.
         unsafe {
             let ptr = self.memory.as_ptr().cast();
             let len = (*self.memory.as_ptr()).len();

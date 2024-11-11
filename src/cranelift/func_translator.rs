@@ -86,7 +86,8 @@ fn declare_wasm_parameters(
             // This is a normal WebAssembly signature parameter, so create a local for it.
             let local = Variable::new(next_local);
             builder.declare_var(local, param_type.value_type);
-            next_local += 1;
+            // This is checked by validation to not overflow
+            next_local = next_local.wrapping_add(1);
 
             let param_value = builder.block_params(entry_block)[i];
             builder.def_var(local, param_value);
@@ -116,7 +117,7 @@ fn translate_local_decls(
         let count = reader.read_var_u32()?;
         let ty = reader.read()?;
         validator.define_locals(pos, count, ty)?;
-        declare_locals(builder, count, ty, &mut next_local, env)?;
+        declare_locals(builder, count, ty, &mut next_local, env);
     }
 
     Ok(())
@@ -128,9 +129,10 @@ fn declare_locals(
     wasm_type: wasmparser::ValType,
     next_local: &mut usize,
     env: &mut TranslationEnvironment,
-) -> crate::Result<()> {
-    // All locals are initialized to 0.
+) {
     use wasmparser::ValType::*;
+
+    // All locals are initialized to 0.
     let (ty, init, needs_stack_map) = match wasm_type {
         I32 => (
             ir::types::I32,
@@ -161,10 +163,10 @@ fn declare_locals(
             )
         }
         Ref(rt) => {
-            let hty = env.convert_heap_type(&rt.heap_type());
+            let hty = env.convert_heap_type(rt.heap_type());
             let (ty, needs_stack_map) = env.reference_type(&hty);
             let init = if rt.is_nullable() {
-                Some(env.translate_ref_null(builder.cursor(), &hty)?)
+                Some(env.translate_ref_null(builder.cursor(), &hty))
             } else {
                 None
             };
@@ -182,9 +184,9 @@ fn declare_locals(
             builder.def_var(local, init);
             builder.set_val_label(init, ValueLabel::new(*next_local));
         }
-        *next_local += 1;
+        // This is checked by validation to not overflow
+        *next_local = next_local.wrapping_add(1);
     }
-    Ok(())
 }
 
 /// Parse the function body in `reader`.
@@ -232,6 +234,5 @@ fn translate_function_body(
 /// Get the current source location from a reader.
 fn cur_srcloc(reader: &BinaryReader) -> ir::SourceLoc {
     // We record source locations as byte code offsets relative to the beginning of the file.
-    // This will wrap around if byte code is larger than 4 GB.
-    ir::SourceLoc::new(reader.original_position() as u32)
+    ir::SourceLoc::new(u32::try_from(reader.original_position()).unwrap())
 }

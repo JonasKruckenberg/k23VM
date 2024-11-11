@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![expect(unused, reason = "TODO")]
 
 use crate::builtins::BuiltinFunctionIndex;
 use crate::compile::NS_BUILTIN;
@@ -67,6 +67,7 @@ pub struct BuiltinFunctionSignatures {
     call_conv: CallConv,
 }
 
+#[expect(clippy::unused_self, reason = "macro use")]
 impl BuiltinFunctionSignatures {
     pub(crate) fn new(isa: &dyn TargetIsa) -> Self {
         Self {
@@ -89,8 +90,9 @@ impl BuiltinFunctionSignatures {
         AbiParam::new(types::I64)
     }
 
+    #[expect(clippy::no_effect_underscore_binding, reason = "empty builtins")]
     pub(crate) fn signature(&self, builtin: BuiltinFunctionIndex) -> Signature {
-        let mut _cur = 0;
+        let mut _cur = 0usize;
         macro_rules! iter {
             (
                 $(

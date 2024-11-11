@@ -10,6 +10,14 @@ use cranelift_entity::PrimaryMap;
 /// A type that knows how to allocate backing memory for instance resources.
 pub trait InstanceAllocator {
     /// Allocate the `VMContext` for an instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the allocations fail.
+    ///
+    /// # Safety
+    ///
+    /// The safety of the entire VM depends on the correct implementation of this method.
     unsafe fn allocate_vmctx(
         &self,
         module: &TranslatedModule,
@@ -18,13 +26,21 @@ pub trait InstanceAllocator {
 
     /// Deallocate a `VMContext` of an instance.
     ///
-    /// # Unsafety
+    /// # Safety
     ///
     /// The `VMContext` must have previously been allocated by
     /// `Self::allocate_vmctx`
     unsafe fn deallocate_vmctx(&self, vmctx: OwnedVMContext);
 
     /// Allocate a memory for an instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the allocations fail.
+    ///
+    /// # Safety
+    ///
+    /// The safety of the entire VM depends on the correct implementation of this method.
     unsafe fn allocate_memory(
         &self,
         module: &TranslatedModule,
@@ -34,7 +50,7 @@ pub trait InstanceAllocator {
 
     /// Deallocate an instance's previously allocated memory.
     ///
-    /// # Unsafety
+    /// # Safety
     ///
     /// The memory must have previously been allocated by
     /// `Self::allocate_memory`, be at the given index, and must currently be
@@ -42,6 +58,14 @@ pub trait InstanceAllocator {
     unsafe fn deallocate_memory(&self, memory_index: DefinedMemoryIndex, memory: Memory);
 
     /// Allocate a table for an instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the allocations fail.
+    ///
+    /// # Safety
+    ///
+    /// The safety of the entire VM depends on the correct implementation of this method.
     unsafe fn allocate_table(
         &self,
         module: &TranslatedModule,
@@ -51,7 +75,7 @@ pub trait InstanceAllocator {
 
     /// Deallocate an instance's previously allocated table.
     ///
-    /// # Unsafety
+    /// # Safety
     ///
     /// The table must have previously been allocated by `Self::allocate_table`,
     /// be at the given index, and must currently be allocated. It must never be
@@ -61,12 +85,20 @@ pub trait InstanceAllocator {
     /// Allocate multiple memories at once.
     ///
     /// By default, this will delegate the actual allocation to `Self::allocate_memory`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the allocations fail.
+    ///
+    /// # Safety
+    ///
+    /// The safety of the entire VM depends on the correct implementation of this method.
     unsafe fn allocate_memories(
         &self,
         module: &TranslatedModule,
         memories: &mut PrimaryMap<DefinedMemoryIndex, Memory>,
     ) -> crate::Result<()> {
-        for (index, plan) in module.memories.iter() {
+        for (index, plan) in &module.memories {
             if let Some(def_index) = module.defined_memory_index(index) {
                 let new_def_index = memories.push(self.allocate_memory(module, plan, def_index)?);
                 debug_assert_eq!(def_index, new_def_index);
@@ -78,12 +110,20 @@ pub trait InstanceAllocator {
     /// Allocate multiple tables at once.
     ///
     /// By default, this will delegate the actual allocation to `Self::allocate_table`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the allocations fail.
+    ///
+    /// # Safety
+    ///
+    /// The safety of the entire VM depends on the correct implementation of this method.
     unsafe fn allocate_tables(
         &self,
         module: &TranslatedModule,
         tables: &mut PrimaryMap<DefinedTableIndex, Table>,
     ) -> crate::Result<()> {
-        for (index, plan) in module.tables.iter() {
+        for (index, plan) in &module.tables {
             if let Some(def_index) = module.defined_table_index(index) {
                 let new_def_index = tables.push(self.allocate_table(module, plan, def_index)?);
                 debug_assert_eq!(def_index, new_def_index);
@@ -96,7 +136,7 @@ pub trait InstanceAllocator {
     ///
     /// By default, this will delegate the actual deallocation to `Self::deallocate_memory`.
     ///
-    /// # Unsafety
+    /// # Safety
     ///
     /// Just like `Self::deallocate_memory` all memories must have been allocated by
     /// `Self::allocate_memories`/`Self::allocate_memory` and must never be used again.
@@ -114,7 +154,7 @@ pub trait InstanceAllocator {
     ///
     /// By default, this will delegate the actual deallocation to `Self::deallocate_table`.
     ///
-    /// # Unsafety
+    /// # Safety
     ///
     /// Just like `Self::deallocate_table` all tables must have been allocated by
     /// `Self::allocate_tables`/`Self::allocate_table` and must never be used again.
@@ -128,6 +168,23 @@ pub trait InstanceAllocator {
     ///
     /// By default, this will in-turn call `Self::allocate_vmctx`, `Self::allocate_tables` and
     /// `Self::allocate_memories` as well as perform necessary clean up.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the allocations fail. In this case, the resources are cleaned up
+    /// automatically.
+    ///
+    /// # Safety
+    ///
+    /// The safety of the entire VM depends on the correct implementation of this method.
+    #[expect(
+        clippy::type_complexity,
+        reason = "TODO clean up the return type and remove"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "entity counts are checked by validation"
+    )]
     unsafe fn allocate_module(
         &self,
         module: &Module,
@@ -136,23 +193,24 @@ pub trait InstanceAllocator {
         PrimaryMap<DefinedTableIndex, Table>,
         PrimaryMap<DefinedMemoryIndex, Memory>,
     )> {
-        let num_defined_memories =
-            module.translated().memories.len() - module.translated().num_imported_memories as usize;
-        let mut memories = PrimaryMap::with_capacity(num_defined_memories);
-
         let num_defined_tables =
-            module.translated().tables.len() - module.translated().num_imported_tables as usize;
-        let mut tables = PrimaryMap::with_capacity(num_defined_tables);
+            module.translated().num_tables() - module.translated().num_imported_tables();
+        let mut tables = PrimaryMap::with_capacity(usize::try_from(num_defined_tables).unwrap());
 
-        match (|| unsafe {
-            self.allocate_memories(module.translated(), &mut memories)?;
+        let num_defined_memories =
+            module.translated().num_memories() - module.translated().num_imported_memories();
+        let mut memories =
+            PrimaryMap::with_capacity(usize::try_from(num_defined_memories).unwrap());
+
+        match (|| {
             self.allocate_tables(module.translated(), &mut tables)?;
+            self.allocate_memories(module.translated(), &mut memories)?;
             self.allocate_vmctx(module.translated(), module.offsets())
         })() {
             Ok(vmctx) => Ok((vmctx, tables, memories)),
             Err(e) => {
-                self.deallocate_tables(&mut tables);
                 self.deallocate_memories(&mut memories);
+                self.deallocate_tables(&mut tables);
                 Err(e)
             }
         }

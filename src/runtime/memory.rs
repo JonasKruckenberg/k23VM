@@ -53,8 +53,10 @@ impl Memory {
     }
 
     pub(crate) fn as_slice_mut(&mut self) -> &mut [u8] {
+        // Safety: The constructor has to ensure that `self.len` is valid.
         unsafe { self.mmap.slice_mut(0..self.len) }
     }
+
     pub(crate) fn as_vmmemory_definition(&mut self) -> VMMemoryDefinition {
         VMMemoryDefinition {
             base: self.mmap.as_mut_ptr(),

@@ -1,10 +1,8 @@
+use crate::placeholder::host_page_size;
 use crate::translate::{WasmFuncType, WasmHeapTopTypeInner, WasmHeapType, WasmValType};
-use core::alloc::Allocator;
-use core::hash::{BuildHasher, Hash};
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{AbiParam, ArgumentPurpose, Signature};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
-use crate::placeholder::host_page_size;
 
 /// Helper macro to generate accessors for an enum.
 #[macro_export]
@@ -52,6 +50,18 @@ macro_rules! owned_enum_accessors {
             }
         }
     )*)
+}
+
+/// Like `offset_of!`, but returns a `u32`.
+///
+/// # Panics
+///
+/// Panics if the offset is too large to fit in a `u32`.
+#[macro_export]
+macro_rules! u32_offset_of {
+    ($ty:ident, $field:ident) => {
+        u32::try_from(offset_of!($ty, $field)).unwrap()
+    };
 }
 
 pub fn value_type(ty: &WasmValType, pointer_type: ir::Type) -> ir::Type {
@@ -128,11 +138,12 @@ pub fn usize_is_multiple_of_host_page_size(bytes: usize) -> bool {
 }
 
 pub fn round_u64_up_to_host_pages(bytes: u64) -> u64 {
-    let page_size = u64::try_from(host_page_size()).unwrap();
+    let page_size = u64::try_from(host_page_size().get()).unwrap();
     debug_assert!(page_size.is_power_of_two());
+    let page_size_minus_one = page_size.checked_sub(1).unwrap();
     bytes
-        .checked_add(page_size - 1)
-        .map(|val| val & !(page_size - 1))
+        .checked_add(page_size_minus_one)
+        .map(|val| val & !page_size_minus_one)
         .unwrap_or_else(|| panic!("{bytes} is too large to be rounded up to a multiple of the host page size of {page_size}"))
 }
 
@@ -141,26 +152,4 @@ pub fn round_usize_up_to_host_pages(bytes: usize) -> usize {
     let bytes = u64::try_from(bytes).unwrap();
     let rounded = round_u64_up_to_host_pages(bytes);
     usize::try_from(rounded).unwrap()
-}
-
-pub(crate) trait HashMapEntryTryExt<'a, K, V, S>: Sized {
-    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
-    where
-        K: Hash,
-        S: BuildHasher;
-}
-
-impl<'a, K, V, S, A: Allocator> HashMapEntryTryExt<'a, K, V, S>
-    for hashbrown::hash_map::Entry<'a, K, V, S, A>
-{
-    fn or_try_insert_with<E, F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>
-    where
-        K: Hash,
-        S: BuildHasher,
-    {
-        match self {
-            hashbrown::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-            hashbrown::hash_map::Entry::Vacant(entry) => Ok(entry.insert(default()?)),
-        }
-    }
 }

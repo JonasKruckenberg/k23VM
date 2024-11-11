@@ -9,9 +9,20 @@ pub struct ConstExprEvaluator {
 }
 
 impl ConstExprEvaluator {
-    /// Evaluate a `ConstExpr` returning the result value. The only use of const expressions at the
-    /// moment is to produce init values for globals, or tables or to calculate offsets. As such all
-    /// uses *require* a const expression to return exactly one result.
+    /// Evaluate a `ConstExpr` returning the result value.
+    ///
+    /// The only use of const expressions at the moment is to produce init values for globals,
+    /// or tables or to calculate offsets. As such all uses *require* a const expression to return
+    /// exactly one result.
+    ///
+    /// # Errors
+    ///
+    /// TODO
+    ///
+    /// # Panics
+    ///
+    /// The only uses of const expressions require them to evaluate to exactly one result.
+    /// This method will panic if there is not exactly one result.
     pub fn eval(&mut self, expr: &ConstExpr) -> crate::Result<VMVal> {
         for op in expr.ops() {
             match op {

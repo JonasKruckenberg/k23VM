@@ -19,7 +19,8 @@ macro_rules! define_builtin_array {
         }
 
         impl VMBuiltinFunctionsArray {
-            #[allow(unused_doc_comments)]
+            /// The actual array of builtin functions pointers, the address of this will be used as
+            /// the value for the `CMContext::builtin_functions` field.
             pub const INIT: VMBuiltinFunctionsArray = VMBuiltinFunctionsArray {
                 $(
                     $name: crate::vm::builtins::$name,
@@ -43,5 +44,5 @@ const _: () = {
         size_of::<VMBuiltinFunctionsArray>()
             == size_of::<usize>()
                 * (BuiltinFunctionIndex::builtin_functions_total_number() as usize)
-    )
+    );
 };

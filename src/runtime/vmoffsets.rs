@@ -1,3 +1,7 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "This module has a bunch of critical, but unchecked additions and multiplications."
+)]
 //! ```rust,ignore
 //! struct VMContext {
 //!     magic: u32,
@@ -28,6 +32,7 @@ use crate::runtime::vmcontext::{
     VMMemoryImport, VMTableDefinition, VMTableImport,
 };
 use crate::translate::TranslatedModule;
+use crate::u32_offset_of;
 use core::fmt;
 use core::mem::offset_of;
 use cranelift_entity::packed_option::ReservedValue;
@@ -59,6 +64,7 @@ impl StaticVMOffsets {
 
     /// Offset of the `magic` value in a `VMContext`.
     #[inline]
+    #[expect(clippy::unused_self, reason = "accessor")]
     pub const fn vmctx_magic(&self) -> u8 {
         // This is required by the implementation of `VMContext::instance` and
         // `VMContext::instance_mut`. If this value changes then those locations
@@ -108,8 +114,9 @@ impl StaticVMOffsets {
         self.vmctx_last_wasm_entry_fp() + self.ptr_size
     }
 
-    /// Return the size of VMSharedTypeIndex.
+    /// Return the size of `VMSharedTypeIndex`.
     #[inline]
+    #[expect(clippy::unused_self, reason = "accessor")]
     pub const fn size_of_vmshared_type_index(&self) -> u8 {
         4
     }
@@ -146,7 +153,7 @@ impl VMOffsets {
     pub fn for_module(ptr_size: u8, module: &TranslatedModule) -> Self {
         let static_ = StaticVMOffsets::new(ptr_size);
 
-        let mut offset = static_.size() as u32;
+        let mut offset = u32::from(static_.size());
         let mut member_offset = |size_of_member: u32| -> u32 {
             let out = offset;
             offset += size_of_member;
@@ -248,22 +255,22 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMFuncRef`s `array_call` field.
     #[inline]
     pub fn vmctx_vmfunc_ref_array_call(&self, index: FuncRefIndex) -> u32 {
-        self.vmctx_vmfunc_ref(index) + offset_of!(VMFuncRef, array_call) as u32
+        self.vmctx_vmfunc_ref(index) + u32_offset_of!(VMFuncRef, array_call)
     }
     /// Offset of the `index`nth `VMFuncRef`s `wasm_call` field.
     #[inline]
     pub fn vmctx_vmfunc_ref_wasm_call(&self, index: FuncRefIndex) -> u32 {
-        self.vmctx_vmfunc_ref(index) + offset_of!(VMFuncRef, wasm_call) as u32
+        self.vmctx_vmfunc_ref(index) + u32_offset_of!(VMFuncRef, wasm_call)
     }
     /// Offset of the `index`nth `VMFuncRef`s `vmctx` field.
     #[inline]
     pub fn vmctx_vmfunc_ref_vmctx(&self, index: FuncRefIndex) -> u32 {
-        self.vmctx_vmfunc_ref(index) + offset_of!(VMFuncRef, vmctx) as u32
+        self.vmctx_vmfunc_ref(index) + u32_offset_of!(VMFuncRef, vmctx)
     }
     /// Offset of the `index`nth `VMFuncRef`s `type_index` field.
     #[inline]
     pub fn vmctx_vmfunc_ref_type_index(&self, index: FuncRefIndex) -> u32 {
-        self.vmctx_vmfunc_ref(index) + offset_of!(VMFuncRef, type_index) as u32
+        self.vmctx_vmfunc_ref(index) + u32_offset_of!(VMFuncRef, type_index)
     }
 
     /// Offset of the `index`nth `VMFunctionImport` in the `imported_functions` array.
@@ -275,17 +282,17 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMFunctionImport`s `wasm_call` field.
     #[inline]
     pub fn vmctx_vmfunction_import_wasm_call(&self, index: FuncIndex) -> u32 {
-        self.vmctx_vmfunction_import(index) + offset_of!(VMFunctionImport, wasm_call) as u32
+        self.vmctx_vmfunction_import(index) + u32_offset_of!(VMFunctionImport, wasm_call)
     }
     /// Offset of the `index`nth `VMFunctionImport`s `array_call` field.
     #[inline]
     pub fn vmctx_vmfunction_import_array_call(&self, index: FuncIndex) -> u32 {
-        self.vmctx_vmfunction_import(index) + offset_of!(VMFunctionImport, array_call) as u32
+        self.vmctx_vmfunction_import(index) + u32_offset_of!(VMFunctionImport, array_call)
     }
     /// Offset of the `index`nth `VMFunctionImport`s `vmctx` field.
     #[inline]
     pub fn vmctx_vmfunction_import_vmctx(&self, index: FuncIndex) -> u32 {
-        self.vmctx_vmfunction_import(index) + offset_of!(VMFunctionImport, vmctx) as u32
+        self.vmctx_vmfunction_import(index) + u32_offset_of!(VMFunctionImport, vmctx)
     }
 
     /// Offset of the `index`nth `VMTableImport` in the `imported_tables` array.
@@ -297,12 +304,12 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMTableImport`s `from` field.
     #[inline]
     pub fn vmctx_vmtable_import_from(&self, index: TableIndex) -> u32 {
-        self.vmctx_vmtable_import(index) + offset_of!(VMTableImport, from) as u32
+        self.vmctx_vmtable_import(index) + u32_offset_of!(VMTableImport, from)
     }
     /// Offset of the `index`nth `VMTableImport`s `vmctx` field.
     #[inline]
     pub fn vmctx_vmtable_import_vmctx(&self, index: TableIndex) -> u32 {
-        self.vmctx_vmtable_import(index) + offset_of!(VMTableImport, vmctx) as u32
+        self.vmctx_vmtable_import(index) + u32_offset_of!(VMTableImport, vmctx)
     }
 
     /// Offset of the `index`nth `VMMemoryImport` in the `imported_memories` array.
@@ -314,12 +321,12 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMMemoryImport`s `from` field.
     #[inline]
     pub fn vmctx_vmmemory_import_from(&self, index: MemoryIndex) -> u32 {
-        self.vmctx_vmmemory_import(index) + offset_of!(VMMemoryImport, from) as u32
+        self.vmctx_vmmemory_import(index) + u32_offset_of!(VMMemoryImport, from)
     }
     /// Offset of the `index`nth `VMMemoryImport`s `vmctx` field.
     #[inline]
     pub fn vmctx_vmmemory_import_vmctx(&self, index: MemoryIndex) -> u32 {
-        self.vmctx_vmmemory_import(index) + offset_of!(VMMemoryImport, vmctx) as u32
+        self.vmctx_vmmemory_import(index) + u32_offset_of!(VMMemoryImport, vmctx)
     }
 
     /// Offset of the `index`nth `VMGlobalImport` in the `imported_globals` array.
@@ -331,12 +338,12 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMGlobalImport`s `from` field.
     #[inline]
     pub fn vmctx_vmglobal_import_from(&self, index: GlobalIndex) -> u32 {
-        self.vmctx_vmglobal_import(index) + offset_of!(VMGlobalImport, from) as u32
+        self.vmctx_vmglobal_import(index) + u32_offset_of!(VMGlobalImport, from)
     }
     /// Offset of the `index`nth `VMGlobalImport`s `vmctx` field.
     #[inline]
     pub fn vmctx_vmglobal_import_vmctx(&self, index: GlobalIndex) -> u32 {
-        self.vmctx_vmglobal_import(index) + offset_of!(VMGlobalImport, vmctx) as u32
+        self.vmctx_vmglobal_import(index) + u32_offset_of!(VMGlobalImport, vmctx)
     }
 
     /// Offset of the `index`nth `VMTableDefinition` in the `tables` array.
@@ -348,12 +355,12 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMTableDefinition`s `base` field.
     #[inline]
     pub fn vmctx_vmtable_definition_base(&self, index: DefinedTableIndex) -> u32 {
-        self.vmctx_vmtable_definition(index) + offset_of!(VMTableDefinition, base) as u32
+        self.vmctx_vmtable_definition(index) + u32_offset_of!(VMTableDefinition, base)
     }
     /// Offset of the `index`nth `VMTableDefinition`s `current_length` field.
     #[inline]
     pub fn vmctx_vmtable_definition_current_length(&self, index: DefinedTableIndex) -> u32 {
-        self.vmctx_vmtable_definition(index) + offset_of!(VMTableDefinition, current_length) as u32
+        self.vmctx_vmtable_definition(index) + u32_offset_of!(VMTableDefinition, current_length)
     }
 
     /// Offset of the `index`nth `VMMemoryDefinition` in the `memories` array.
@@ -365,13 +372,12 @@ impl VMOffsets {
     /// Offset of the `index`nth `VMMemoryDefinition`s `base` field.
     #[inline]
     pub fn vmctx_vmmemory_definition_base(&self, index: DefinedMemoryIndex) -> u32 {
-        self.vmctx_vmmemory_definition(index) + offset_of!(VMMemoryDefinition, base) as u32
+        self.vmctx_vmmemory_definition(index) + u32_offset_of!(VMMemoryDefinition, base)
     }
     /// Offset of the `index`nth `VMMemoryDefinition`s `current_length` field.
     #[inline]
     pub fn vmctx_vmmemory_definition_current_length(&self, index: DefinedMemoryIndex) -> u32 {
-        self.vmctx_vmmemory_definition(index)
-            + offset_of!(VMMemoryDefinition, current_length) as u32
+        self.vmctx_vmmemory_definition(index) + u32_offset_of!(VMMemoryDefinition, current_length)
     }
 
     /// Offset of the `index`nth `VMGlobalDefinition` in the `globals` array.
@@ -379,38 +385,6 @@ impl VMOffsets {
     pub fn vmctx_vmglobal_definition(&self, index: DefinedGlobalIndex) -> u32 {
         assert!(index.as_u32() < self.num_defined_globals);
         self.vmctx_globals_begin() + index.as_u32() * u32_size_of::<VMGlobalDefinition>()
-    }
-    #[inline]
-    pub fn num_imported_funcs(&self) -> u32 {
-        self.num_imported_funcs
-    }
-    #[inline]
-    pub fn num_imported_tables(&self) -> u32 {
-        self.num_imported_tables
-    }
-    #[inline]
-    pub fn num_imported_memories(&self) -> u32 {
-        self.num_imported_memories
-    }
-    #[inline]
-    pub fn num_imported_globals(&self) -> u32 {
-        self.num_imported_globals
-    }
-    #[inline]
-    pub fn num_escaped_funcs(&self) -> u32 {
-        self.num_escaped_funcs
-    }
-    #[inline]
-    pub fn num_defined_tables(&self) -> u32 {
-        self.num_defined_tables
-    }
-    #[inline]
-    pub fn num_defined_memories(&self) -> u32 {
-        self.num_defined_memories
-    }
-    #[inline]
-    pub fn num_defined_globals(&self) -> u32 {
-        self.num_defined_globals
     }
     #[inline]
     pub fn size(&self) -> u32 {

@@ -113,19 +113,19 @@ macro_rules! stored_impls {
     ($bind:ident $(($ty:path, $has:ident, $get:ident, $get_mut:ident, $field:expr))*) => {
         $(
             impl Store {
-                #[allow(missing_docs)]
+                #[expect(missing_docs, reason = "inside macro")]
                 pub fn $has(&self, index: Stored<$ty>) -> bool {
                     let $bind = self;
                     $field.get(index.index).is_some()
                 }
 
-                #[allow(missing_docs)]
+                #[expect(missing_docs, reason = "inside macro")]
                 pub fn $get(&self, index: Stored<$ty>) -> Option<&$ty> {
                     let $bind = self;
                     $field.get(index.index)
                 }
 
-                #[allow(missing_docs)]
+                #[expect(missing_docs, reason = "inside macro")]
                 pub fn $get_mut(&mut self, index: Stored<$ty>) -> Option<&mut $ty> {
                     let $bind = self;
                     $field.get_mut(index.index)
@@ -174,10 +174,7 @@ impl<T> Stored<T> {
 
 impl<T> Clone for Stored<T> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            _m: PhantomData,
-        }
+        *self
     }
 }
 

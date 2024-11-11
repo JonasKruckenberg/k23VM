@@ -7,14 +7,14 @@ use wasmparser::{FuncValidator, WasmModuleResources};
 pub fn blocktype_params_results<T>(
     validator: &FuncValidator<T>,
     ty: wasmparser::BlockType,
-) -> crate::Result<(
+) -> (
     impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + '_,
     impl ExactSizeIterator<Item = wasmparser::ValType> + Clone + '_,
-)>
+)
 where
     T: WasmModuleResources,
 {
-    Ok(match ty {
+    match ty {
         wasmparser::BlockType::Empty => (
             BlockTypeParamsOrReturns::Empty,
             BlockTypeParamsOrReturns::Empty,
@@ -35,10 +35,10 @@ where
                 BlockTypeParamsOrReturns::Many(ty.results(), 0),
             )
         }
-    })
+    }
 }
 
-#[allow(missing_docs)]
+/// Iterator over the parameters or return types of a block.
 #[derive(Debug, Clone)]
 pub enum BlockTypeParamsOrReturns<'a> {
     Empty,
@@ -59,7 +59,7 @@ impl Iterator for BlockTypeParamsOrReturns<'_> {
             }
             BlockTypeParamsOrReturns::Many(slice, offset) => {
                 let val = *slice.get(*offset)?;
-                *offset += 1;
+                *offset = offset.wrapping_add(1);
                 Some(val)
             }
         }
@@ -81,7 +81,7 @@ pub fn block_with_params(
     builder: &mut FunctionBuilder,
     params: impl IntoIterator<Item = wasmparser::ValType>,
     env: &mut TranslationEnvironment,
-) -> crate::Result<ir::Block> {
+) -> ir::Block {
     let block = builder.create_block();
     for ty in params {
         match ty {
@@ -98,7 +98,7 @@ pub fn block_with_params(
                 builder.append_block_param(block, ir::types::F64);
             }
             wasmparser::ValType::Ref(rt) => {
-                let hty = env.convert_heap_type(&rt.heap_type());
+                let hty = env.convert_heap_type(rt.heap_type());
                 let (ty, needs_stack_map) = env.reference_type(&hty);
                 let val = builder.append_block_param(block, ty);
                 if needs_stack_map {
@@ -110,7 +110,7 @@ pub fn block_with_params(
             }
         }
     }
-    Ok(block)
+    block
 }
 
 /// Turns a `wasmparser` `f32` into a `Cranelift` one.
@@ -123,7 +123,7 @@ pub fn f64_translation(x: wasmparser::Ieee64) -> ir::immediates::Ieee64 {
     ir::immediates::Ieee64::with_bits(x.bits())
 }
 
-/// Special VMContext value label. It is tracked as 0xffff_fffe label.
+/// Special `VMContext` value label. It is tracked as `0xffff_fffe` label.
 pub fn get_vmctx_value_label() -> ir::ValueLabel {
     const VMCTX_LABEL: u32 = 0xffff_fffe;
     ir::ValueLabel::from_u32(VMCTX_LABEL)

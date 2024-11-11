@@ -1,3 +1,9 @@
+// TODO audit index arithmetic and make overflow behavior explicit
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "canonicalization involves a bunch of raw index arithmetic, which *should* never overflow."
+)]
+
 use crate::indices::{
     CanonicalizedTypeIndex, ModuleInternedTypeIndex, RecGroupRelativeTypeIndex, VMSharedTypeIndex,
 };
@@ -200,14 +206,14 @@ impl PartialEq for RegisteredType {
     fn eq(&self, other: &Self) -> bool {
         let eq = Arc::ptr_eq(&self.entry.0, &other.entry.0);
 
-        // if cfg!(debug_assertions) {
-        //     if eq {
-        //         assert!(Engine::same(&self.engine, &other.engine));
-        //         assert_eq!(self.ty, other.ty);
-        //     } else {
-        //         assert!(self.ty != other.ty || !Engine::same(&self.engine, &other.engine));
-        //     }
-        // }
+        if cfg!(debug_assertions) {
+            if eq {
+                assert!(Engine::same(&self.engine, &other.engine));
+                assert_eq!(self.ty, other.ty);
+            } else {
+                assert!(self.ty != other.ty || !Engine::same(&self.engine, &other.engine));
+            }
+        }
 
         eq
     }
@@ -375,7 +381,7 @@ impl TypeRegistryInner {
                     if idx < module_rec_group_start {
                         map[idx]
                     } else {
-                        let rec_group_offset = idx.as_u32() - module_rec_group_start.as_u32();
+                        let rec_group_offset = idx.as_u32() + module_rec_group_start.as_u32();
                         VMSharedTypeIndex::from_u32(engine_rec_group_start + rec_group_offset)
                     }
                 });
@@ -425,7 +431,7 @@ impl TypeRegistryInner {
     }
 
     fn unregister_type_collection(&mut self, collection: &RuntimeTypeCollection) {
-        for entry in collection.rec_groups.iter() {
+        for entry in &collection.rec_groups {
             if entry.decr_ref_count("TypeRegistryInner::unregister_type_collection") {
                 self.unregister_entry(entry.clone());
             }
@@ -532,7 +538,7 @@ impl Drop for TypeRegistryInner {
             "type registry not empty: types slab is not empty: {types:#?}"
         );
         assert!(
-            type_to_rec_group.is_empty() || type_to_rec_group.values().all(|x| x.is_none()),
+            type_to_rec_group.is_empty() || type_to_rec_group.values().all(Option::is_none),
             "type registry not empty: type-to-rec-group map is not empty: {type_to_rec_group:#?}"
         );
         assert!(
@@ -575,19 +581,23 @@ impl Borrow<WasmRecGroup> for RecGroupEntry {
 impl RecGroupEntry {
     fn incr_ref_count(&self, why: &str) {
         let old_count = self.0.registrations.fetch_add(1, Ordering::AcqRel);
+        let new_count = old_count
+            .checked_add(1)
+            .expect("RecGroupEntry registrations overflow");
         tracing::trace!(
-            "increment registration count for {self:?} (registrations -> {}): {why}",
-            old_count + 1
+            "increment registration count for {self:?} (registrations -> {new_count}): {why}",
         );
     }
 
     #[must_use = "caller must remove entry from registry if `decref` returns `true`"]
     fn decr_ref_count(&self, why: &str) -> bool {
         let old_count = self.0.registrations.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(old_count, 0,);
+        let new_count = old_count
+            .checked_sub(1)
+            .expect("RecGroupEntry registrations underflow");
+
         tracing::trace!(
-            "decrement registration count for {self:?} (registrations -> {}): {why}",
-            old_count - 1
+            "decrement registration count for {self:?} (registrations -> {new_count}): {why}",
         );
         old_count == 1
     }

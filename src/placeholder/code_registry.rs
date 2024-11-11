@@ -4,10 +4,10 @@
 //! faulting pc belongs to and by extension be able to retrieve trap and debugging information related
 //! to it.
 
+use crate::runtime::CodeMemory;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use spin::lock_api::RwLock;
-use crate::runtime::CodeMemory;
 use spin::Once;
 
 fn global_code() -> &'static RwLock<GlobalRegistry> {
@@ -32,9 +32,12 @@ pub fn lookup_code(pc: usize) -> Option<(Arc<CodeMemory>, usize)> {
 /// Must not have been previously registered and must be `unregister`'d to
 /// prevent leaking memory.
 ///
-/// This is required to enable trap_handling to work correctly since the signal handler
-/// will lookup in the `GLOBAL_CODE` list to determine which a particular pc
-/// is a trap or not.
+/// This is used by trap handling to determine which region of code a faulting
+/// address.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "ptr and length are taken from the slice and can't overflow"
+)]
 pub fn register_code(code: &Arc<CodeMemory>) {
     let text = code.text();
     if text.is_empty() {
@@ -42,8 +45,6 @@ pub fn register_code(code: &Arc<CodeMemory>) {
     }
     let start = text.as_ptr() as usize;
     let end = start + text.len() - 1;
-    let prev = global_code()
-        .write()
-        .insert(end, (start, code.clone()));
+    let prev = global_code().write().insert(end, (start, code.clone()));
     assert!(prev.is_none());
 }

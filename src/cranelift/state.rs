@@ -2,7 +2,6 @@ use crate::cranelift::env::TranslationEnvironment;
 use crate::cranelift::memory::CraneliftMemory;
 use crate::cranelift::{CraneliftGlobal, CraneliftTable};
 use crate::indices::{FuncIndex, GlobalIndex, MemoryIndex, TableIndex, TypeIndex};
-use crate::utils::HashMapEntryTryExt;
 use alloc::vec::Vec;
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::{Block, FuncRef, Function, Inst, SigRef, Value};
@@ -117,21 +116,21 @@ impl FuncTranslationState {
     /// The popped values are not returned. Use `peekn` to look at them before popping.
     pub(crate) fn popn(&mut self, n: usize) {
         self.ensure_length_is_at_least(n);
-        let new_len = self.stack.len() - n;
+        let new_len = self.stack.len().wrapping_sub(n);
         self.stack.truncate(new_len);
     }
 
     /// Peek at the top `n` values on the stack in the order they were pushed.
     pub(crate) fn peekn(&self, n: usize) -> &[Value] {
         self.ensure_length_is_at_least(n);
-        &self.stack[self.stack.len() - n..]
+        &self.stack[self.stack.len().wrapping_sub(n)..]
     }
 
     /// Peek at the top `n` values on the stack in the order they were pushed.
     pub(crate) fn peekn_mut(&mut self, n: usize) -> &mut [Value] {
         self.ensure_length_is_at_least(n);
         let len = self.stack.len();
-        &mut self.stack[len - n..]
+        &mut self.stack[len.wrapping_sub(n)..]
     }
 
     /// Push a block on the control stack.
@@ -144,7 +143,7 @@ impl FuncTranslationState {
         debug_assert!(num_param_types <= self.stack.len());
         self.control_stack.push(ControlStackFrame::Block {
             destination: following_code,
-            original_stack_size: self.stack.len() - num_param_types,
+            original_stack_size: self.stack.len().wrapping_sub(num_param_types),
             num_param_values: num_param_types,
             num_return_values: num_result_types,
             exit_is_branched_to: false,
@@ -163,7 +162,7 @@ impl FuncTranslationState {
         self.control_stack.push(ControlStackFrame::Loop {
             header,
             destination: following_code,
-            original_stack_size: self.stack.len() - num_param_types,
+            original_stack_size: self.stack.len().wrapping_sub(num_param_types),
             num_param_values: num_param_types,
             num_return_values: num_result_types,
         });
@@ -186,7 +185,7 @@ impl FuncTranslationState {
         // allocation. See also the comment in `translate_operator` for
         // `Operator::Else`.
         self.stack.reserve(num_param_types);
-        for i in (self.stack.len() - num_param_types)..self.stack.len() {
+        for i in self.stack.len().wrapping_sub(num_param_types)..self.stack.len() {
             let val = self.stack[i];
             self.stack.push(val);
         }
@@ -194,7 +193,7 @@ impl FuncTranslationState {
         self.control_stack.push(ControlStackFrame::If {
             destination,
             else_data,
-            original_stack_size: self.stack.len() - num_param_types,
+            original_stack_size: self.stack.len().wrapping_sub(num_param_types),
             num_param_values: num_param_types,
             num_return_values: num_result_types,
             exit_is_branched_to: false,
@@ -209,15 +208,12 @@ impl FuncTranslationState {
         func: &mut Function,
         index: FuncIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<(FuncRef, usize)> {
-        self.functions
-            .entry(index)
-            .or_try_insert_with(|| {
-                let fref = env.make_direct_func(func, index)?;
-                let sig = func.dfg.ext_funcs[fref].signature;
-                Ok((fref, num_wasm_parameters(&func.dfg.signatures[sig], env)))
-            })
-            .copied()
+    ) -> (FuncRef, usize) {
+        *self.functions.entry(index).or_insert_with(|| {
+            let fref = env.make_direct_func(func, index);
+            let sig = func.dfg.ext_funcs[fref].signature;
+            (fref, num_wasm_parameters(&func.dfg.signatures[sig], env))
+        })
     }
 
     pub(crate) fn get_indirect_sig(
@@ -225,14 +221,11 @@ impl FuncTranslationState {
         func: &mut Function,
         index: TypeIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<(SigRef, usize)> {
-        self.signatures
-            .entry(index)
-            .or_try_insert_with(|| {
-                let sig = env.make_indirect_sig(func, index)?;
-                Ok((sig, num_wasm_parameters(&func.dfg.signatures[sig], env)))
-            })
-            .copied()
+    ) -> (SigRef, usize) {
+        *self.signatures.entry(index).or_insert_with(|| {
+            let sig = env.make_indirect_sig(func, index);
+            (sig, num_wasm_parameters(&func.dfg.signatures[sig], env))
+        })
     }
 
     pub(crate) fn get_global(
@@ -240,10 +233,10 @@ impl FuncTranslationState {
         func: &mut Function,
         index: GlobalIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<&'_ mut CraneliftGlobal> {
+    ) -> &'_ mut CraneliftGlobal {
         self.globals
             .entry(index)
-            .or_try_insert_with(|| env.make_global(func, index))
+            .or_insert_with(|| env.make_global(func, index))
     }
 
     pub(crate) fn get_memory(
@@ -251,10 +244,10 @@ impl FuncTranslationState {
         func: &mut Function,
         index: MemoryIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<&'_ mut CraneliftMemory> {
+    ) -> &'_ mut CraneliftMemory {
         self.memories
             .entry(index)
-            .or_try_insert_with(|| env.make_memory(func, index))
+            .or_insert_with(|| env.make_memory(func, index))
     }
 
     pub(crate) fn get_table(
@@ -262,10 +255,10 @@ impl FuncTranslationState {
         func: &mut Function,
         index: TableIndex,
         env: &mut TranslationEnvironment,
-    ) -> crate::Result<&'_ mut CraneliftTable> {
+    ) -> &'_ mut CraneliftTable {
         self.tables
             .entry(index)
-            .or_try_insert_with(|| env.make_table(func, index))
+            .or_insert_with(|| env.make_table(func, index))
     }
 
     #[inline]
@@ -275,7 +268,7 @@ impl FuncTranslationState {
             "attempted to access {} values but stack only has {} values",
             n,
             self.stack.len()
-        )
+        );
     }
 }
 
@@ -444,7 +437,10 @@ impl ControlStackFrame {
             }
             _ => 0,
         };
-        stack.truncate(self.original_stack_size() - num_duplicated_params);
+        stack.truncate(
+            self.original_stack_size()
+                .wrapping_sub(num_duplicated_params),
+        );
     }
 }
 

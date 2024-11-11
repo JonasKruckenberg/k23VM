@@ -1,13 +1,13 @@
 use crate::builtins::BuiltinFunctionIndex;
 use crate::compile::{FilePos, NS_BUILTIN, NS_WASM_FUNC};
 use crate::indices::FuncIndex;
+use crate::trap::Trap;
 use cranelift_codegen::ir::{ExternalName, StackSlots, UserExternalName, UserExternalNameRef};
 use cranelift_codegen::{
     binemit, Final, FinalizedMachReloc, FinalizedRelocTarget, MachBufferFinalized,
     ValueLabelsRanges,
 };
 use cranelift_entity::PrimaryMap;
-use crate::trap::Trap;
 
 #[derive(Debug)]
 pub struct CompiledFunction {

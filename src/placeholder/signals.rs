@@ -1,4 +1,4 @@
-#![allow(static_mut_refs)]
+#![expect(static_mut_refs, reason = "signal handlers are static mut")]
 
 use crate::placeholder::code_registry;
 use core::ffi::c_void;
@@ -33,9 +33,11 @@ pub unsafe fn ensure_signal_handlers_are_registered() {
             handler.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER | libc::SA_ONSTACK;
             handler.sa_sigaction = trap_handler as usize;
             libc::sigemptyset(&mut handler.sa_mask);
-            if libc::sigaction(signal, &handler, slot) != 0 {
-                panic!("unable to install signal handler",);
-            }
+            assert_ne!(
+                libc::sigaction(signal, &handler, slot),
+                0i32,
+                "unable to install signal handler"
+            );
         });
     });
 }
@@ -75,6 +77,8 @@ unsafe extern "C" fn trap_handler(
         _ => panic!("unknown signal: {signum}"),
     };
 
+    // Safety: the block below has all sorts of unsafe code, accessing C-structs, reading registers etc.
+    // all horrifically unsafe.
     let handled = (|| unsafe {
         let p = &crate::placeholder::trap_handling::TLS;
 
@@ -97,9 +101,9 @@ unsafe extern "C" fn trap_handler(
             _ => None,
         };
 
-        let cx = &*(context as *const libc::ucontext_t);
-        let pc = (*cx.uc_mcontext).__ss.__pc as usize;
-        let fp = (*cx.uc_mcontext).__ss.__fp as usize;
+        let cx = &*(context.cast::<libc::ucontext_t>());
+        let pc = usize::try_from((*cx.uc_mcontext).__ss.__pc).unwrap();
+        let fp = usize::try_from((*cx.uc_mcontext).__ss.__fp).unwrap();
 
         // If this fault wasn't in wasm code, then it's not our problem
         let Some((code, text_offset)) = code_registry::lookup_code(pc) else {
@@ -131,19 +135,19 @@ unsafe extern "C" fn trap_handler(
     }
 
     let previous = *previous;
-    if previous.sa_flags & libc::SA_SIGINFO != 0 {
+    if previous.sa_flags & libc::SA_SIGINFO != 0i32 {
         mem::transmute::<usize, extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void)>(
             previous.sa_sigaction,
-        )(signum, siginfo, context)
+        )(signum, siginfo, context);
     } else if previous.sa_sigaction == libc::SIG_DFL || previous.sa_sigaction == libc::SIG_IGN {
-        libc::sigaction(signum, &previous as *const _, ptr::null_mut());
+        libc::sigaction(signum, ptr::from_ref(&previous), ptr::null_mut());
     } else {
-        mem::transmute::<usize, extern "C" fn(libc::c_int)>(previous.sa_sigaction)(signum)
+        mem::transmute::<usize, extern "C" fn(libc::c_int)>(previous.sa_sigaction)(signum);
     }
 }
 
 unsafe fn set_pc(cx: *mut c_void, pc: usize, arg1: usize) {
-    let cx = &mut *(cx as *mut libc::ucontext_t);
+    let cx = &mut *(cx.cast::<libc::ucontext_t>());
     (*cx.uc_mcontext).__ss.__pc = pc as u64;
     (*cx.uc_mcontext).__ss.__x[0] = arg1 as u64;
 }

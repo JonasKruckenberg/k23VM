@@ -4,8 +4,6 @@
 #![feature(allocator_api)]
 #![feature(thread_local)]
 #![deny(missing_docs)]
-#![allow(clippy::must_use_candidate)]
-#![allow(unused)]
 
 extern crate alloc;
 extern crate core;
@@ -33,8 +31,7 @@ mod utils;
 mod values;
 
 pub use errors::Error;
-#[allow(missing_docs)]
-pub type Result<T> = core::result::Result<T, Error>;
+pub(crate) type Result<T> = core::result::Result<T, Error>;
 pub use engine::Engine;
 pub use func::Func;
 pub use global::Global;

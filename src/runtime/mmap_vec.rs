@@ -42,7 +42,7 @@ impl<T> MmapVec<T> {
             let mut this = Self::with_reserved(round_usize_up_to_host_pages(slice.len()))?;
             this.try_extend_from_slice(slice)?;
             Ok(this)
-        } 
+        }
     }
 
     pub fn reserve(&self) -> usize {
@@ -61,6 +61,7 @@ impl<T> MmapVec<T> {
         if self.len == 0 {
             &[]
         } else {
+            // Safety: The rest of the code has to ensure that `self.len` is valid.
             unsafe { slice::from_raw_parts(self.as_ptr(), self.len) }
         }
     }
@@ -69,6 +70,7 @@ impl<T> MmapVec<T> {
         if self.len == 0 {
             &mut []
         } else {
+            // Safety: The rest of the code has to ensure that `self.len` is valid.
             unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
         }
     }
@@ -87,9 +89,10 @@ impl<T> MmapVec<T> {
         let count = (other).len();
 
         let mut tx = self.guard();
-        let old_len = unsafe { tx.try_grow(count)? };
+        let old_len = tx.try_grow(count)?;
+        // Safety: `try_grow` ensures there is enough space for `count` elements.
         unsafe {
-            ptr::copy_nonoverlapping(other.as_ptr(), tx.vec.as_mut_ptr().add(old_len), count)
+            ptr::copy_nonoverlapping(other.as_ptr(), tx.vec.as_mut_ptr().add(old_len), count);
         };
         tx.finish();
 
@@ -101,7 +104,7 @@ impl<T> MmapVec<T> {
         T: Clone,
     {
         let mut tx = self.guard();
-        let old_len = unsafe { tx.try_grow(count)? };
+        let old_len = tx.try_grow(count)?;
         tx.slice_mut()[old_len..].fill(elem);
         tx.finish();
 
@@ -112,19 +115,21 @@ impl<T> MmapVec<T> {
         (self.mmap, self.len)
     }
 
-    unsafe fn try_grow(&mut self, additional: usize) -> crate::Result<usize> {
+    fn try_grow(&mut self, additional: usize) -> crate::Result<usize> {
         let old_size = self.len;
         let old_accessible = self.accessible();
 
-        if self.len + additional < self.mmap.len() {
-            self.len += additional;
+        if self.len.checked_add(additional).unwrap() < self.mmap.len() {
+            self.len = self.len.wrapping_add(additional);
         } else {
             panic!("oom")
         }
 
         if self.accessible() > old_accessible {
-            self.mmap
-                .make_accessible(old_accessible, self.accessible() - old_accessible)?;
+            self.mmap.make_accessible(
+                old_accessible,
+                self.accessible().wrapping_sub(old_accessible),
+            )?;
         }
 
         Ok(old_size)
@@ -173,7 +178,7 @@ impl<T> DerefMut for MmapVecGuard<'_, T> {
 
 impl<T> MmapVecGuard<'_, T> {
     pub fn finish(self) {
-        mem::forget(self)
+        mem::forget(self);
     }
 }
 

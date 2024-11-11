@@ -14,13 +14,10 @@ use crate::{DEFAULT_OFFSET_GUARD_SIZE, WASM32_MAX_SIZE};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+pub use const_expr::{ConstExpr, ConstOp};
 use cranelift_entity::packed_option::ReservedValue;
 use cranelift_entity::{EntitySet, PrimaryMap};
 use hashbrown::HashMap;
-use wasmparser::collections::IndexMap;
-use wasmparser::WasmFeatures;
-
-pub use const_expr::{ConstExpr, ConstOp};
 pub use module_translator::ModuleTranslator;
 pub use module_types::ModuleTypes;
 pub use type_convert::WasmparserTypeConverter;
@@ -28,6 +25,8 @@ pub use types::{
     EntityType, WasmFuncType, WasmHeapTopTypeInner, WasmHeapType, WasmHeapTypeInner, WasmRecGroup,
     WasmRefType, WasmSubType, WasmValType,
 };
+use wasmparser::collections::IndexMap;
+use wasmparser::WasmFeatures;
 
 #[derive(Debug)]
 pub struct ModuleTranslation<'data> {
@@ -110,11 +109,13 @@ pub struct TranslatedModule {
 
 impl TranslatedModule {
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn func_index(&self, index: DefinedFuncIndex) -> FuncIndex {
         FuncIndex::from_u32(self.num_imported_functions + index.as_u32())
     }
 
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_func_index(&self, index: FuncIndex) -> Option<DefinedFuncIndex> {
         if self.is_imported_func(index) {
             None
@@ -131,11 +132,13 @@ impl TranslatedModule {
     }
 
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn table_index(&self, index: DefinedTableIndex) -> TableIndex {
         TableIndex::from_u32(self.num_imported_tables + index.as_u32())
     }
 
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_table_index(&self, index: TableIndex) -> Option<DefinedTableIndex> {
         if self.is_imported_table(index) {
             None
@@ -152,6 +155,7 @@ impl TranslatedModule {
     }
 
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_memory_index(&self, index: MemoryIndex) -> Option<DefinedMemoryIndex> {
         if self.is_imported_memory(index) {
             None
@@ -168,11 +172,13 @@ impl TranslatedModule {
     }
 
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn global_index(&self, index: DefinedGlobalIndex) -> GlobalIndex {
         GlobalIndex::from_u32(self.num_imported_globals + index.as_u32())
     }
 
     #[inline]
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn defined_global_index(&self, index: GlobalIndex) -> Option<DefinedGlobalIndex> {
         if self.is_imported_global(index) {
             None
@@ -200,15 +206,31 @@ impl TranslatedModule {
     pub fn num_imported_globals(&self) -> u32 {
         self.num_imported_globals
     }
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn num_defined_tables(&self) -> u32 {
-        u32::try_from(self.tables.len()).unwrap() - self.num_imported_tables
+        self.num_tables() - self.num_imported_tables
     }
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn num_defined_memories(&self) -> u32 {
-        u32::try_from(self.memories.len()).unwrap() - self.num_imported_memories
+        self.num_memories() - self.num_imported_memories
     }
+    #[expect(clippy::arithmetic_side_effects, reason = "checked through validation")]
     pub fn num_defined_globals(&self) -> u32 {
-        u32::try_from(self.globals.len()).unwrap() - self.num_imported_globals
+        self.num_globals() - self.num_imported_globals
     }
+    pub fn num_functions(&self) -> u32 {
+        u32::try_from(self.functions.len()).unwrap()
+    }
+    pub fn num_tables(&self) -> u32 {
+        u32::try_from(self.tables.len()).unwrap()
+    }
+    pub fn num_memories(&self) -> u32 {
+        u32::try_from(self.memories.len()).unwrap()
+    }
+    pub fn num_globals(&self) -> u32 {
+        u32::try_from(self.globals.len()).unwrap()
+    }
+
     pub fn num_escaped_funcs(&self) -> u32 {
         self.num_escaped_functions
     }
@@ -266,7 +288,7 @@ impl TableDesc {
         type_convert: &WasmparserTypeConverter,
     ) -> Self {
         Self {
-            element_type: type_convert.convert_ref_type(&ty.element_type),
+            element_type: type_convert.convert_ref_type(ty.element_type),
             table64: ty.table64,
             minimum: ty.initial,
             maximum: ty.maximum,
@@ -279,11 +301,11 @@ impl TableDesc {
 pub struct MemoryDesc {
     /// The minimum size of this memory, in wasm pages.
     ///
-    /// For 32-bit memories (when memory64 is false) this is guaranteed to be at most u32::MAX.
+    /// For 32-bit memories (when memory64 is false) this is guaranteed to be at most `u32::MAX`.
     pub minimum: u64,
     /// Optional maximum size of this memory, in wasm pages.
     ///
-    /// For 32-bit memories (when memory64 is false) this is guaranteed to be at most u32::MAX.
+    /// For 32-bit memories (when memory64 is false) this is guaranteed to be at most `u32::MAX`.
     /// This field is always present for valid wasm memories when shared is true.
     pub maximum: Option<u64>,
     /// The size in bytes of the offset guard region.
@@ -323,8 +345,9 @@ impl MemoryDesc {
             memory64: ty.memory64,
             page_size_log2: ty
                 .page_size_log2
-                .map(|log2| u8::try_from(log2).unwrap())
-                .unwrap_or(Self::DEFAULT_PAGE_SIZE_LOG2),
+                .map_or(Self::DEFAULT_PAGE_SIZE_LOG2, |log2| {
+                    u8::try_from(log2).unwrap()
+                }),
             offset_guard_size: DEFAULT_OFFSET_GUARD_SIZE,
         }
     }
@@ -357,12 +380,11 @@ impl MemoryDesc {
     /// `u64` return type. This means that the memory can't be allocated but
     /// it's deferred to the caller to how to deal with that.
     pub fn maximum_byte_size(&self) -> Result<u64, SizeOverflow> {
-        match self.maximum {
-            Some(max) => max.checked_mul(self.page_size()).ok_or(SizeOverflow),
-            None => {
-                let min = self.minimum_byte_size()?;
-                Ok(min.max(self.max_size_based_on_index_type()))
-            }
+        if let Some(max) = self.maximum {
+            max.checked_mul(self.page_size()).ok_or(SizeOverflow)
+        } else {
+            let min = self.minimum_byte_size()?;
+            Ok(min.max(self.max_size_based_on_index_type()))
         }
     }
 
@@ -408,11 +430,11 @@ pub struct GlobalDesc {
 
 impl GlobalDesc {
     pub fn from_wasmparser(
-        ty: &wasmparser::GlobalType,
+        ty: wasmparser::GlobalType,
         type_convert: &WasmparserTypeConverter,
     ) -> Self {
         Self {
-            content_type: type_convert.convert_val_type(&ty.content_type),
+            content_type: type_convert.convert_val_type(ty.content_type),
             mutable: ty.mutable,
             shared: ty.shared,
         }
@@ -494,17 +516,17 @@ pub struct DebugInfo<'wasm> {
 
 #[derive(Debug, Default)]
 pub struct Names<'wasm> {
-    pub func_names: HashMap<FuncIndex, &'wasm str>,
-    pub locals_names: HashMap<FuncIndex, HashMap<LocalIndex, &'wasm str>>,
-    pub global_names: HashMap<GlobalIndex, &'wasm str>,
-    pub data_names: HashMap<DataIndex, &'wasm str>,
-    pub labels_names: HashMap<FuncIndex, HashMap<LabelIndex, &'wasm str>>,
-    pub type_names: HashMap<TypeIndex, &'wasm str>,
-    pub table_names: HashMap<TableIndex, &'wasm str>,
-    pub memory_names: HashMap<MemoryIndex, &'wasm str>,
-    pub element_names: HashMap<ElemIndex, &'wasm str>,
-    pub fields_names: HashMap<FuncIndex, HashMap<FieldIndex, &'wasm str>>,
-    pub tag_names: HashMap<TagIndex, &'wasm str>,
+    pub funcs: HashMap<FuncIndex, &'wasm str>,
+    pub locals: HashMap<FuncIndex, HashMap<LocalIndex, &'wasm str>>,
+    pub globals: HashMap<GlobalIndex, &'wasm str>,
+    pub data: HashMap<DataIndex, &'wasm str>,
+    pub labels: HashMap<FuncIndex, HashMap<LabelIndex, &'wasm str>>,
+    pub types: HashMap<TypeIndex, &'wasm str>,
+    pub tables: HashMap<TableIndex, &'wasm str>,
+    pub memories: HashMap<MemoryIndex, &'wasm str>,
+    pub elements: HashMap<ElemIndex, &'wasm str>,
+    pub fields: HashMap<FuncIndex, HashMap<FieldIndex, &'wasm str>>,
+    pub tags: HashMap<TagIndex, &'wasm str>,
 }
 
 #[derive(Debug, Default)]
@@ -514,14 +536,12 @@ pub struct Producers<'wasm> {
     pub sdk: Vec<ProducersSdkField<'wasm>>,
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub struct ProducersLanguageField<'wasm> {
     pub name: ProducersLanguage<'wasm>,
     pub version: &'wasm str,
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub enum ProducersLanguage<'wasm> {
     Wat,
@@ -532,14 +552,12 @@ pub enum ProducersLanguage<'wasm> {
     Other(&'wasm str),
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub struct ProducersToolField<'wasm> {
     pub name: ProducersTool<'wasm>,
     pub version: &'wasm str,
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub enum ProducersTool<'wasm> {
     Wabt,
@@ -556,14 +574,12 @@ pub enum ProducersTool<'wasm> {
     Other(&'wasm str),
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub struct ProducersSdkField<'wasm> {
     pub name: ProducersSdk<'wasm>,
     pub version: &'wasm str,
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub enum ProducersSdk<'wasm> {
     Emscripten,

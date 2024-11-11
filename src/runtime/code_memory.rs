@@ -1,8 +1,8 @@
-use alloc::vec::Vec;
 use crate::compile::FunctionLoc;
 use crate::placeholder::mmap::Mmap;
 use crate::runtime::MmapVec;
 use crate::trap::Trap;
+use alloc::vec::Vec;
 
 #[derive(Debug)]
 pub struct CodeMemory {
@@ -10,8 +10,8 @@ pub struct CodeMemory {
     len: usize,
     published: bool,
 
-    trap_offsets: Vec<u32>, 
-    traps: Vec<Trap>
+    trap_offsets: Vec<u32>,
+    traps: Vec<Trap>,
 }
 
 impl CodeMemory {
@@ -22,7 +22,7 @@ impl CodeMemory {
             len: size,
             published: false,
             trap_offsets,
-            traps
+            traps,
         }
     }
 
@@ -35,21 +35,24 @@ impl CodeMemory {
             return Ok(());
         }
 
-        unsafe {
-            self.mmap.make_readonly(0..self.len)?;
+        self.mmap.make_readonly(0..self.len)?;
 
-            // Switch the executable portion from readonly to read/execute.
-            self.mmap.make_executable(0..self.len, true)?;
-        }
+        // Switch the executable portion from readonly to read/execute.
+        self.mmap.make_executable(0..self.len, true)?;
 
         Ok(())
     }
 
     #[inline]
     pub fn text(&self) -> &[u8] {
+        // Safety: The constructor has to ensure that `self.len` is valid.
         unsafe { self.mmap.slice(0..self.len) }
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "FIXME: text offset additions *should* be fine, but validate and remove"
+    )]
     pub fn resolve_function_loc(&self, func_loc: FunctionLoc) -> usize {
         let text_range = {
             let r = self.text().as_ptr_range();
@@ -66,7 +69,8 @@ impl CodeMemory {
 
         // Assert the function location actually lies in our text section
         debug_assert!(
-            text_range.start <= addr && text_range.end >= addr + func_loc.length as usize
+            text_range.start <= addr
+                && text_range.end >= addr.saturating_add(usize::try_from(func_loc.length).unwrap())
         );
 
         addr
@@ -74,11 +78,12 @@ impl CodeMemory {
 
     pub fn lookup_trap_code(&self, text_offset: usize) -> Option<Trap> {
         let text_offset = u32::try_from(text_offset).unwrap();
-        
-        let index = self.trap_offsets
+
+        let index = self
+            .trap_offsets
             .binary_search_by_key(&text_offset, |val| *val)
             .ok()?;
 
-        Trap::try_from(self.traps[index]).ok()
+        Some(self.traps[index])
     }
 }

@@ -22,7 +22,7 @@ impl Table {
     pub(crate) fn from_vm_export(store: &mut Store, export: runtime::ExportedTable) -> Self {
         Self(store.push_table(export))
     }
-    pub(crate) fn comes_from_same_store(&self, store: &Store) -> bool {
+    pub(crate) fn comes_from_same_store(self, store: &Store) -> bool {
         store.has_table(self.0)
     }
 }

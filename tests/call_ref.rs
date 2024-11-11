@@ -1,5 +1,5 @@
-use wasmparser::Validator;
 use k23_vm::{Engine, Module};
+use wasmparser::Validator;
 
 #[test_log::test]
 fn main() {

@@ -89,14 +89,9 @@ pub union VMVal {
     pub anyref: u32,
 }
 
-impl fmt::Debug for VMVal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        unsafe { f.debug_tuple("VMVal").field(&self.v128).finish() }
-    }
-}
-
 impl PartialEq for VMVal {
     fn eq(&self, other: &Self) -> bool {
+        // Safety: we're accessing a union
         unsafe { self.v128 == other.v128 }
     }
 }
@@ -104,7 +99,7 @@ impl PartialEq for VMVal {
 impl VMVal {
     #[inline]
     pub fn i32(i: i32) -> VMVal {
-        VMVal::i64(i as i64)
+        VMVal::i64(i64::from(i))
     }
     #[inline]
     pub fn i64(i: i64) -> VMVal {
@@ -112,11 +107,11 @@ impl VMVal {
     }
     #[inline]
     pub fn u32(i: u32) -> VMVal {
-        VMVal::u64(i as u64)
+        VMVal::u64(u64::from(i))
     }
     #[inline]
     pub fn u64(i: u64) -> VMVal {
-        VMVal::i64(i as i64)
+        VMVal::i64(i64::try_from(i).unwrap())
     }
     #[inline]
     pub fn f32(i: u32) -> VMVal {
@@ -135,7 +130,7 @@ impl VMVal {
     #[inline]
     pub fn funcref(ptr: *mut c_void) -> VMVal {
         VMVal {
-            funcref: ptr.map_addr(|i| i.to_le()),
+            funcref: ptr.map_addr(usize::to_le),
         }
     }
     #[inline]
@@ -153,10 +148,12 @@ impl VMVal {
 
     #[inline]
     pub fn get_i32(&self) -> i32 {
+        // Safety: we're accessing a union
         unsafe { i32::from_le(self.i32) }
     }
     #[inline]
     pub fn get_i64(&self) -> i64 {
+        // Safety: we're accessing a union
         unsafe { i64::from_le(self.i64) }
     }
     #[inline]
@@ -169,31 +166,72 @@ impl VMVal {
     }
     #[inline]
     pub fn get_f32(&self) -> u32 {
+        // Safety: we're accessing a union
         unsafe { u32::from_le(self.f32) }
     }
     #[inline]
     pub fn get_f64(&self) -> u64 {
+        // Safety: we're accessing a union
         unsafe { u64::from_le(self.f64) }
     }
     #[inline]
     pub fn get_v128(&self) -> u128 {
+        // Safety: we're accessing a union
         unsafe { u128::from_le_bytes(self.v128) }
     }
     #[inline]
     pub fn get_funcref(&self) -> *mut c_void {
+        // Safety: we're accessing a union
         unsafe { self.funcref.map_addr(usize::from_le) }
     }
     #[inline]
     pub fn get_externref(&self) -> u32 {
+        // Safety: we're accessing a union
         let externref = u32::from_le(unsafe { self.externref });
         assert_eq!(externref, 0, "gc not supported");
         externref
     }
     #[inline]
     pub fn get_anyref(&self) -> u32 {
+        // Safety: we're accessing a union
         let anyref = u32::from_le(unsafe { self.anyref });
         assert_eq!(anyref, 0, "gc not supported");
         anyref
+    }
+}
+
+// Safety: This type is just a bag-of-bits so it's up to the caller to figure out how
+// to safely deal with threading concerns and safely access interior bits.
+unsafe impl Send for VMVal {}
+
+// Safety: see above
+unsafe impl Sync for VMVal {}
+
+impl fmt::Debug for VMVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Hex<T>(T);
+        impl<T: fmt::LowerHex> fmt::Debug for Hex<T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let bytes = size_of::<T>();
+                let hex_digits_per_byte = 2;
+                let hex_digits = bytes.wrapping_mul(hex_digits_per_byte);
+                write!(f, "0x{:0width$x}", self.0, width = hex_digits)
+            }
+        }
+
+        // Safety: we're accessing a union here
+        unsafe {
+            f.debug_struct("ValRaw")
+                .field("i32", &Hex(self.i32))
+                .field("i64", &Hex(self.i64))
+                .field("f32", &Hex(self.f32))
+                .field("f64", &Hex(self.f64))
+                .field("v128", &Hex(u128::from_le_bytes(self.v128)))
+                .field("funcref", &self.funcref)
+                .field("externref", &Hex(self.externref))
+                .field("anyref", &Hex(self.anyref))
+                .finish()
+        }
     }
 }
 
@@ -311,13 +349,16 @@ pub struct VMGlobalDefinition {
     data: [u8; 16],
 }
 
+#[expect(
+    clippy::cast_ptr_alignment,
+    reason = "Methods cast from a byte slice to types, this is fine though"
+)]
 impl VMGlobalDefinition {
-    #[allow(clippy::needless_pass_by_value)]
     pub unsafe fn from_vmval(vmval: VMVal) -> Self {
         Self { data: vmval.v128 }
     }
 
-    pub unsafe fn to_vmval(&self, wasm_ty: &ValType) -> VMVal {
+    pub unsafe fn to_vmval(&self, wasm_ty: ValType) -> VMVal {
         match wasm_ty {
             ValType::I32 => VMVal {
                 i32: *self.as_i32(),
@@ -434,5 +475,19 @@ impl VMGlobalDefinition {
     /// Return a mutable reference to the value as u128 bits.
     pub unsafe fn as_u128_bits_mut(&mut self) -> &mut [u8; 16] {
         &mut *(self.data.as_mut().as_mut_ptr().cast::<[u8; 16]>())
+    }
+}
+
+#[cfg(test)]
+mod test_vmglobal_definition {
+    use super::VMGlobalDefinition;
+
+    #[test]
+    fn check_vmglobal_definition_alignment() {
+        assert!(align_of::<VMGlobalDefinition>() >= align_of::<i32>());
+        assert!(align_of::<VMGlobalDefinition>() >= align_of::<i64>());
+        assert!(align_of::<VMGlobalDefinition>() >= align_of::<f32>());
+        assert!(align_of::<VMGlobalDefinition>() >= align_of::<f64>());
+        assert!(align_of::<VMGlobalDefinition>() >= align_of::<[u8; 16]>());
     }
 }

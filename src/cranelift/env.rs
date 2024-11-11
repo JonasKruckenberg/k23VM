@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![expect(unused, reason = "this module has a number of method stubs")]
 
 use crate::compile::NS_WASM_FUNC;
 use crate::cranelift::builtins::BuiltinFunctions;
@@ -26,7 +26,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::Offset32;
 use cranelift_codegen::ir::types::{I32, I64};
 use cranelift_codegen::ir::{
-    ArgumentPurpose, ExtFuncData, ExternalName, Fact, FuncRef, GlobalValue, GlobalValueData, Inst,
+    ArgumentPurpose, ExtFuncData, ExternalName, FuncRef, GlobalValue, GlobalValueData, Inst,
     MemFlags, MemoryType, SigRef, Signature, TrapCode, Type, UserExternalName, Value,
 };
 use cranelift_codegen::ir::{Function, InstBuilder};
@@ -38,6 +38,7 @@ use smallvec::SmallVec;
 /// A smallvec that holds the IR values for a struct's fields.
 pub type StructFieldsVec = SmallVec<[Value; 4]>;
 
+#[expect(clippy::struct_excessive_bools, reason = "TODO replace with bitflags")]
 pub struct TranslationEnvironment<'module_env> {
     isa: &'module_env dyn TargetIsa,
     module: &'module_env TranslatedModule,
@@ -101,7 +102,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
                 });
 
                 self.pcc_vmctx_memtype = Some(vmctx_memtype);
-                func.global_value_facts[vmctx] = Some(Fact::Mem {
+                func.global_value_facts[vmctx] = Some(ir::Fact::Mem {
                     ty: vmctx_memtype,
                     min_offset: 0,
                     max_offset: 0,
@@ -114,7 +115,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
         })
     }
 
-    pub(crate) fn vmctx_val(&mut self, pos: &mut FuncCursor<'_>) -> ir::Value {
+    pub(crate) fn vmctx_val(&mut self, pos: &mut FuncCursor<'_>) -> Value {
         let pointer_type = self.pointer_type();
         let vmctx = self.vmctx(pos.func);
         pos.ins().global_value(pointer_type, vmctx)
@@ -202,7 +203,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
         let mt = memtype.map(|mt| {
             let pointee_mt = self.create_empty_struct_memtype(func);
             self.add_field_to_memtype(func, mt, offset, pointee_mt, readonly);
-            func.global_value_facts[pointee] = Some(Fact::Mem {
+            func.global_value_facts[pointee] = Some(ir::Fact::Mem {
                 ty: pointee_mt,
                 min_offset: 0,
                 max_offset: 0,
@@ -215,11 +216,7 @@ impl<'module_env> TranslationEnvironment<'module_env> {
 }
 
 impl TranslationEnvironment<'_> {
-    pub fn make_direct_func(
-        &self,
-        func: &mut Function,
-        index: FuncIndex,
-    ) -> crate::Result<FuncRef> {
+    pub fn make_direct_func(&self, func: &mut Function, index: FuncIndex) -> FuncRef {
         let sig_index = self.module.functions[index].signature;
         let sig = self
             .types
@@ -234,18 +231,14 @@ impl TranslationEnvironment<'_> {
                 index.as_u32(),
             )));
 
-        Ok(func.import_function(ExtFuncData {
+        func.import_function(ExtFuncData {
             name,
             signature,
             colocated: self.module.defined_func_index(index).is_some(),
-        }))
+        })
     }
 
-    pub fn make_indirect_sig(
-        &self,
-        func: &mut Function,
-        sig_index: TypeIndex,
-    ) -> crate::Result<SigRef> {
+    pub fn make_indirect_sig(&self, func: &mut Function, sig_index: TypeIndex) -> SigRef {
         let interned_index = self.module.types[sig_index];
         let wasm_func_ty = self
             .types
@@ -253,15 +246,10 @@ impl TranslationEnvironment<'_> {
             .unwrap()
             .unwrap_func();
         let sig = wasm_call_signature(self.isa, wasm_func_ty);
-        let sig_ref = func.import_signature(sig);
-        Ok(sig_ref)
+        func.import_signature(sig)
     }
 
-    pub fn make_table(
-        &mut self,
-        func: &mut Function,
-        index: TableIndex,
-    ) -> crate::Result<CraneliftTable> {
+    pub fn make_table(&mut self, func: &mut Function, index: TableIndex) -> CraneliftTable {
         let table = &self.module.tables[index];
         let vmctx = self.vmctx(func);
         let pointer_type = self.pointer_type();
@@ -304,18 +292,14 @@ impl TranslationEnvironment<'_> {
             todo!("resizable tables")
         };
 
-        Ok(CraneliftTable {
+        CraneliftTable {
             base_gv: table_base,
             bound,
             element_size,
-        })
+        }
     }
 
-    pub fn make_memory(
-        &mut self,
-        func: &mut Function,
-        index: MemoryIndex,
-    ) -> crate::Result<CraneliftMemory> {
+    pub fn make_memory(&mut self, func: &mut Function, index: MemoryIndex) -> CraneliftMemory {
         let plan = &self.module.memories[index];
         let vmctx = self.vmctx(func);
 
@@ -351,7 +335,7 @@ impl TranslationEnvironment<'_> {
                 size: plan.max_size_based_on_index_type(),
             });
             // This fact applies to any pointer to the start of the memory.
-            let base_fact = Fact::Mem {
+            let base_fact = ir::Fact::Mem {
                 ty: data_mt,
                 min_offset: 0,
                 max_offset: 0,
@@ -372,8 +356,10 @@ impl TranslationEnvironment<'_> {
                         readonly: true,
                         fact: Some(base_fact.clone()),
                     });
-                    *size =
-                        core::cmp::max(*size, offset + u64::from(self.isa.pointer_type().bytes()));
+                    *size = cmp::max(
+                        *size,
+                        offset.saturating_add(u64::from(self.isa.pointer_type().bytes())),
+                    );
                 }
                 _ => {
                     panic!("Bad memtype");
@@ -398,13 +384,13 @@ impl TranslationEnvironment<'_> {
             // integer is the maximum memory64 size (2^64) which is one
             // larger than `u64::MAX` (2^64 - 1). In this case, just say the
             // minimum heap size is `u64::MAX`.
-            debug_assert_eq!(plan.minimum, 1 << 48);
-            debug_assert_eq!(plan.page_size(), 1 << 16);
+            debug_assert_eq!(plan.minimum, 1 << 48i32);
+            debug_assert_eq!(plan.page_size(), 1 << 16i32);
             u64::MAX
         });
         let max_size = plan.maximum_byte_size().ok();
 
-        Ok(CraneliftMemory {
+        CraneliftMemory {
             base_gv: heap_base,
             memory_type,
             min_size,
@@ -413,27 +399,27 @@ impl TranslationEnvironment<'_> {
             index_type: if plan.memory64 { I64 } else { I32 },
             offset_guard_size: plan.offset_guard_size,
             page_size_log2: plan.page_size_log2,
-        })
+        }
     }
 
     pub(crate) fn make_global(
         &mut self,
         func: &mut Function,
         index: GlobalIndex,
-    ) -> crate::Result<CraneliftGlobal> {
+    ) -> CraneliftGlobal {
         let global = &self.module.globals[index];
         debug_assert!(!global.shared);
 
         let (gv, offset) = self.get_global_location(func, index);
 
-        Ok(CraneliftGlobal::Memory {
+        CraneliftGlobal::Memory {
             gv,
             offset: offset.into(),
             ty: value_type(
                 &self.module.globals[index].content_type,
                 self.pointer_type(),
             ),
-        })
+        }
     }
     pub fn target_isa(&self) -> &dyn TargetIsa {
         self.isa
@@ -476,7 +462,7 @@ impl TranslationEnvironment<'_> {
         (ty, needs_stack_map)
     }
 
-    pub(crate) fn convert_heap_type(&self, ty: &wasmparser::HeapType) -> WasmHeapType {
+    pub(crate) fn convert_heap_type(&self, ty: wasmparser::HeapType) -> WasmHeapType {
         WasmparserTypeConverter::new(self.types, self.module).convert_heap_type(ty)
     }
 
@@ -564,7 +550,7 @@ impl TranslationEnvironment<'_> {
         callee_index: FuncIndex,
         callee: FuncRef,
         call_args: &[Value],
-    ) -> crate::Result<Inst> {
+    ) -> Inst {
         CallBuilder::new(builder, self).direct_call(callee_index, callee, call_args)
     }
 
@@ -588,7 +574,7 @@ impl TranslationEnvironment<'_> {
         sig_ref: SigRef,
         callee: Value,
         args: &[Value],
-    ) -> crate::Result<Reachability<Inst>> {
+    ) -> Reachability<Inst> {
         CallBuilder::new(builder, self).indirect_call(
             table_index,
             table,
@@ -918,25 +904,17 @@ impl TranslationEnvironment<'_> {
     }
 
     /// Translate a `ref.null T` WebAssembly instruction.
-    pub fn translate_ref_null(
-        &mut self,
-        mut pos: FuncCursor,
-        hty: &WasmHeapType,
-    ) -> crate::Result<Value> {
+    pub fn translate_ref_null(&mut self, mut pos: FuncCursor, hty: &WasmHeapType) -> Value {
         assert!(!hty.shared);
         let (ty, _) = self.reference_type(hty);
 
-        Ok(pos.ins().iconst(ty, 0))
+        pos.ins().iconst(ty, 0)
     }
 
     /// Translate a `ref.is_null` WebAssembly instruction.
-    pub fn translate_ref_is_null(
-        &mut self,
-        mut pos: FuncCursor,
-        value: Value,
-    ) -> crate::Result<Value> {
+    pub fn translate_ref_is_null(&mut self, mut pos: FuncCursor, value: Value) -> Value {
         let byte_is_null = pos.ins().icmp_imm(IntCC::Equal, value, 0);
-        Ok(pos.ins().uextend(I32, byte_is_null))
+        pos.ins().uextend(I32, byte_is_null)
     }
 
     /// Translate a `ref.func` WebAssembly instruction.
@@ -1254,8 +1232,8 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         callee_index: FuncIndex,
         callee: FuncRef,
         call_args: &[Value],
-    ) -> crate::Result<Inst> {
-        let mut real_call_args = Vec::with_capacity(call_args.len() + 2);
+    ) -> Inst {
+        let mut real_call_args = Vec::with_capacity(call_args.len().wrapping_add(2));
         let caller_vmctx = self
             .builder
             .func
@@ -1274,7 +1252,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
             real_call_args.extend_from_slice(call_args);
 
             // Finally, make the direct call!
-            Ok(self.direct_call_inst(callee, &real_call_args))
+            self.direct_call_inst(callee, &real_call_args)
         } else {
             // Handle direct calls to imported functions. We use an indirect call
             // so that we don't have to patch the code at runtime.
@@ -1312,7 +1290,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
             real_call_args.extend_from_slice(call_args);
 
             // Finally, make the indirect call!
-            Ok(self.indirect_call_inst(sig_ref, func_addr, &real_call_args))
+            self.indirect_call_inst(sig_ref, func_addr, &real_call_args)
         }
     }
 
@@ -1336,7 +1314,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         sig_ref: SigRef,
         callee: Value,
         call_args: &[Value],
-    ) -> crate::Result<Reachability<Inst>> {
+    ) -> Reachability<Inst> {
         let pointer_type = self.env.pointer_type();
 
         // Load the funcref pointer from the table.
@@ -1349,7 +1327,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         let funcref_ptr = self
             .builder
             .ins()
-            .load(pointer_type, flags, table_entry_addr, 0);
+            .load(pointer_type, flags, table_entry_addr, 0i32);
 
         // If necessary, check the signature.
         let check = self.check_indirect_call_type_signature(table_index, ty_index, funcref_ptr);
@@ -1367,13 +1345,13 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
                 may_be_null.then_some(TRAP_INDIRECT_CALL_TO_NULL)
             }
             // We statically know this will trap
-            CheckIndirectCallTypeSignature::StaticTrap => return Ok(Reachability::Unreachable),
+            CheckIndirectCallTypeSignature::StaticTrap => return Reachability::Unreachable,
         };
 
         let (func_ptr, callee_vmctx) = self.load_func_and_vmctx(funcref_ptr, trap_code);
 
-        self.unchecked_indirect_call(sig_ref, func_ptr, callee_vmctx, call_args)
-            .map(Reachability::Reachable)
+        let inst = self.unchecked_indirect_call(sig_ref, func_ptr, callee_vmctx, call_args);
+        Reachability::Reachable(inst)
     }
 
     fn check_indirect_call_type_signature(
@@ -1384,7 +1362,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
     ) -> CheckIndirectCallTypeSignature {
         let table = &self.env.module.tables[table_index];
         let sig_id_size = self.env.offsets.static_.size_of_vmshared_type_index();
-        let sig_id_type = Type::int(u16::from(sig_id_size) * 8).unwrap();
+        let sig_id_type = Type::int(u16::from(sig_id_size).wrapping_mul(8)).unwrap();
 
         assert!(
             !table.element_type.heap_type.shared,
@@ -1471,8 +1449,9 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
             }
             // We're dealing with un-canonicalized types at compilation stage, so finding `Shared`
             // or `RecGroup` indices here is a bug
-            WasmHeapTypeInner::ConcreteFunc(CanonicalizedTypeIndex::Shared(_))
-            | WasmHeapTypeInner::ConcreteFunc(CanonicalizedTypeIndex::RecGroup(_)) => {
+            WasmHeapTypeInner::ConcreteFunc(
+                CanonicalizedTypeIndex::Shared(_) | CanonicalizedTypeIndex::RecGroup(_),
+            ) => {
                 unreachable!(
                     "encountered shared or rec group indices during compilation. this is a bug"
                 )
@@ -1519,8 +1498,8 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         func_addr: Value,
         callee_vmctx: Value,
         call_args: &[Value],
-    ) -> crate::Result<Inst> {
-        let mut real_call_args = Vec::with_capacity(call_args.len() + 2);
+    ) -> Inst {
+        let mut real_call_args = Vec::with_capacity(call_args.len().wrapping_add(2));
         let caller_vmctx = self
             .builder
             .func
@@ -1534,7 +1513,7 @@ impl<'a, 'func, 'module_env> CallBuilder<'a, 'func, 'module_env> {
         // Then append the regular call arguments.
         real_call_args.extend_from_slice(call_args);
 
-        Ok(self.indirect_call_inst(sig_ref, func_addr, &real_call_args))
+        self.indirect_call_inst(sig_ref, func_addr, &real_call_args)
     }
 
     fn direct_call_inst(&mut self, callee: FuncRef, args: &[Value]) -> Inst {

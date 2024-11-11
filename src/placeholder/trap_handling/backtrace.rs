@@ -1,7 +1,7 @@
-use alloc::vec;
-use alloc::vec::Vec;
 use crate::placeholder::arch;
 use crate::placeholder::trap_handling::CallThreadState;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::ops::ControlFlow;
 
 #[derive(Debug)]
@@ -28,27 +28,22 @@ impl Backtrace {
     ) {
         tracing::trace!("====== Capturing Backtrace ======");
 
-        let (last_wasm_exit_pc, last_wasm_exit_fp) = match trap_pc_and_fp {
-            // If we exited Wasm by catching a trap, then the Wasm-to-host
-            // trampoline did not get a chance to save the last Wasm PC and FP,
-            // and we need to use the plumbed-through values instead.
-            Some((pc, fp)) => (pc, fp),
-            // Either there is no Wasm currently on the stack, or we exited Wasm
-            // through the Wasm-to-host trampoline.
-            None => {
-                // TODO this is horrible can we improve this?
-                let pc = *state
-                    .vmctx
-                    .byte_add(state.offsets.vmctx_last_wasm_exit_pc() as usize)
-                    .cast::<usize>();
-                let fp = *state
-                    .vmctx
-                    .byte_add(state.offsets.vmctx_last_wasm_entry_fp() as usize)
-                    .cast::<usize>();
+        // If we exited Wasm by catching a trap, then the Wasm-to-host
+        // trampoline did not get a chance to save the last Wasm PC and FP,
+        // and we need to use the plumbed-through values instead.
+        let (last_wasm_exit_pc, last_wasm_exit_fp) = trap_pc_and_fp.unwrap_or_else(|| {
+            // TODO this is horrible can we improve this?
+            let pc = *state
+                .vmctx
+                .byte_add(state.offsets.vmctx_last_wasm_exit_pc() as usize)
+                .cast::<usize>();
+            let fp = *state
+                .vmctx
+                .byte_add(state.offsets.vmctx_last_wasm_entry_fp() as usize)
+                .cast::<usize>();
 
-                (pc, fp)
-            }
-        };
+            (pc, fp)
+        });
 
         let last_wasm_entry_fp = *state
             .vmctx
@@ -184,9 +179,7 @@ impl Backtrace {
     }
 
     /// Iterate over the frames inside this backtrace.
-    pub fn frames<'a>(
-        &'a self,
-    ) -> impl ExactSizeIterator<Item = &'a Frame> + DoubleEndedIterator + 'a {
+    pub fn frames(&self) -> impl ExactSizeIterator<Item = &Frame> + DoubleEndedIterator {
         self.0.iter()
     }
 }

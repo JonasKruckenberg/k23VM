@@ -18,7 +18,7 @@ impl<'a> WasmparserTypeConverter<'a> {
         Self { types, module }
     }
 
-    pub fn convert_val_type(&self, ty: &wasmparser::ValType) -> WasmValType {
+    pub fn convert_val_type(&self, ty: wasmparser::ValType) -> WasmValType {
         use wasmparser::ValType;
         match ty {
             ValType::I32 => WasmValType::I32,
@@ -30,18 +30,19 @@ impl<'a> WasmparserTypeConverter<'a> {
         }
     }
 
-    pub fn convert_ref_type(&self, ty: &wasmparser::RefType) -> WasmRefType {
+    pub fn convert_ref_type(&self, ty: wasmparser::RefType) -> WasmRefType {
         WasmRefType {
             nullable: ty.is_nullable(),
-            heap_type: self.convert_heap_type(&ty.heap_type()),
+            heap_type: self.convert_heap_type(ty.heap_type()),
         }
     }
 
-    pub fn convert_heap_type(&self, ty: &wasmparser::HeapType) -> WasmHeapType {
+    pub fn convert_heap_type(&self, ty: wasmparser::HeapType) -> WasmHeapType {
         match ty {
-            wasmparser::HeapType::Concrete(index) => self.lookup_heap_type(*index),
+            wasmparser::HeapType::Concrete(index) => self.lookup_heap_type(index),
             wasmparser::HeapType::Abstract { shared, ty } => {
                 use crate::translate::types::WasmHeapTypeInner::*;
+
                 use wasmparser::AbstractHeapType;
                 let ty = match ty {
                     AbstractHeapType::Func => Func,
@@ -60,10 +61,7 @@ impl<'a> WasmparserTypeConverter<'a> {
                     AbstractHeapType::NoCont => NoCont,
                 };
 
-                WasmHeapType {
-                    shared: *shared,
-                    ty,
-                }
+                WasmHeapType { shared, ty }
             }
         }
     }
@@ -85,7 +83,7 @@ impl<'a> WasmparserTypeConverter<'a> {
                 WasmCompositeType::new_func(ty.shared, self.convert_func_type(func))
             }
             CompositeInnerType::Array(array) => {
-                WasmCompositeType::new_array(ty.shared, self.convert_array_type(array))
+                WasmCompositeType::new_array(ty.shared, self.convert_array_type(*array))
             }
             CompositeInnerType::Struct(strct) => {
                 WasmCompositeType::new_struct(ty.shared, self.convert_struct_type(strct))
@@ -99,11 +97,11 @@ impl<'a> WasmparserTypeConverter<'a> {
         let mut results = Vec::with_capacity(ty.results().len());
 
         for param in ty.params() {
-            params.push(self.convert_val_type(param));
+            params.push(self.convert_val_type(*param));
         }
 
         for result in ty.results() {
-            results.push(self.convert_val_type(result));
+            results.push(self.convert_val_type(*result));
         }
 
         WasmFuncType {
@@ -112,29 +110,29 @@ impl<'a> WasmparserTypeConverter<'a> {
         }
     }
 
-    pub fn convert_array_type(&self, ty: &wasmparser::ArrayType) -> WasmArrayType {
-        WasmArrayType(self.convert_field_type(&ty.0))
+    pub fn convert_array_type(&self, ty: wasmparser::ArrayType) -> WasmArrayType {
+        WasmArrayType(self.convert_field_type(ty.0))
     }
 
     pub fn convert_struct_type(&self, ty: &wasmparser::StructType) -> WasmStructType {
         let fields: Vec<_> = ty
             .fields
             .iter()
-            .map(|ty| self.convert_field_type(ty))
+            .map(|ty| self.convert_field_type(*ty))
             .collect();
         WasmStructType {
             fields: fields.into_boxed_slice(),
         }
     }
 
-    pub fn convert_field_type(&self, ty: &wasmparser::FieldType) -> WasmFieldType {
+    pub fn convert_field_type(&self, ty: wasmparser::FieldType) -> WasmFieldType {
         WasmFieldType {
             mutable: ty.mutable,
-            element_type: self.convert_storage_type(&ty.element_type),
+            element_type: self.convert_storage_type(ty.element_type),
         }
     }
 
-    pub fn convert_storage_type(&self, ty: &wasmparser::StorageType) -> WasmStorageType {
+    pub fn convert_storage_type(&self, ty: wasmparser::StorageType) -> WasmStorageType {
         use wasmparser::StorageType;
         match ty {
             StorageType::I8 => WasmStorageType::I8,

@@ -71,7 +71,7 @@ entity_impl!(TagIndex);
 /// blocks appear in the code.
 ///
 /// Source:
-/// https://github.com/WebAssembly/extended-name-section/blob/main/proposals/extended-name-section/Overview.md#label-names
+/// <https://github.com/WebAssembly/extended-name-section/blob/main/proposals/extended-name-section/Overview.md#label-names>
 ///
 /// ALSO NOTE: No existing tooling appears to emit label names, so this just doesn't
 /// appear in the wild probably.

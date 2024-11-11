@@ -4,6 +4,7 @@ use crate::cranelift::builtins::BuiltinFunctionSignatures;
 use crate::cranelift::env::TranslationEnvironment;
 use crate::cranelift::func_translator::FuncTranslator;
 use crate::indices::DefinedFuncIndex;
+use crate::placeholder::arch;
 use crate::runtime::{StaticVMOffsets, VMCONTEXT_MAGIC};
 use crate::translate::{
     FunctionBodyData, ModuleTranslation, ModuleTypes, WasmFuncType, WasmValType,
@@ -145,7 +146,7 @@ impl Compiler for CraneliftCompiler {
         let array_call_sig = array_call_signature(self.target_isa());
 
         let mut compiler = self.function_compiler();
-        let func = ir::Function::with_name_signature(Default::default(), array_call_sig);
+        let func = ir::Function::with_name_signature(UserFuncName::default(), array_call_sig);
         let (mut builder, block0) = compiler.builder(func);
 
         let (vmctx, caller_vmctx, values_vec_ptr, values_vec_len) = {
@@ -203,7 +204,7 @@ impl Compiler for CraneliftCompiler {
         let _array_call_sig = array_call_signature(self.target_isa());
 
         let mut compiler = self.function_compiler();
-        let func = ir::Function::with_name_signature(Default::default(), wasm_call_sig);
+        let func = ir::Function::with_name_signature(UserFuncName::default(), wasm_call_sig);
         let (mut builder, block0) = compiler.builder(func);
 
         let args = builder.func.dfg.block_params(block0).to_vec();
@@ -234,7 +235,7 @@ impl Compiler for CraneliftCompiler {
         let sig = BuiltinFunctionSignatures::new(isa).signature(index);
 
         let mut compiler = self.function_compiler();
-        let func = ir::Function::with_name_signature(Default::default(), sig.clone());
+        let func = ir::Function::with_name_signature(UserFuncName::default(), sig.clone());
         let (mut builder, block0) = compiler.builder(func);
         let vmctx = builder.block_params(block0)[0];
 
@@ -255,10 +256,10 @@ impl Compiler for CraneliftCompiler {
             vmctx,
             i32::from(self.offsets.vmctx_builtin_functions()),
         );
-        let body_offset = i32::try_from(index.as_u32() * pointer_type.bytes()).unwrap();
+        let func_offset = i32::try_from(index.as_u32().wrapping_mul(pointer_type.bytes())).unwrap();
         let func_addr = builder
             .ins()
-            .load(pointer_type, mem_flags, array_addr, body_offset);
+            .load(pointer_type, mem_flags, array_addr, func_offset);
 
         // Forward all our own arguments to the libcall itself, and then return
         // all the same results as the libcall.
@@ -335,7 +336,7 @@ impl FunctionCompiler<'_> {
             compiled_function.metadata_mut().start_srcloc =
                 FilePos::new(u32::try_from(offset).unwrap());
             compiled_function.metadata_mut().end_srcloc =
-                FilePos::new(u32::try_from(offset + len).unwrap());
+                FilePos::new(u32::try_from(offset.wrapping_add(len)).unwrap());
 
             // TODO
             // let srclocs = compiled_function
@@ -395,15 +396,13 @@ fn save_last_wasm_exit_fp_and_pc(
         pointer_type,
         MemFlags::trusted(),
         trampoline_fp,
-        // The FP always points to the next older FP for all supported
-        // targets.
-        0,
+        i32::try_from(arch::NEXT_OLDER_FP_FROM_FP_OFFSET).unwrap(),
     );
     builder.ins().store(
         MemFlags::trusted(),
         wasm_fp,
         vmctx,
-        Offset32::new(offsets.vmctx_last_wasm_exit_fp() as i32),
+        Offset32::new(i32::from(offsets.vmctx_last_wasm_exit_fp())),
     );
     // Finally save the Wasm return address to the limits.
     let wasm_pc = builder.ins().get_return_address(pointer_type);
@@ -411,7 +410,7 @@ fn save_last_wasm_exit_fp_and_pc(
         MemFlags::trusted(),
         wasm_pc,
         vmctx,
-        Offset32::new(offsets.vmctx_last_wasm_exit_pc() as i32),
+        Offset32::new(i32::from(offsets.vmctx_last_wasm_exit_pc())),
     );
 }
 
@@ -424,7 +423,7 @@ fn allocate_stack_array_and_spill_args(
     // Compute the size of the values vector.
     let value_size = size_of::<u128>();
     let values_vec_len = cmp::max(ty.params.len(), ty.results.len());
-    let values_vec_byte_size = u32::try_from(value_size * values_vec_len).unwrap();
+    let values_vec_byte_size = u32::try_from(value_size.wrapping_mul(values_vec_len)).unwrap();
     let values_vec_len = u32::try_from(values_vec_len).unwrap();
 
     let slot = builder.func.create_sized_stack_slot(ir::StackSlotData::new(
@@ -432,7 +431,7 @@ fn allocate_stack_array_and_spill_args(
         values_vec_byte_size,
         4,
     ));
-    let values_vec_ptr = builder.ins().stack_addr(pointer_type, slot, 0);
+    let values_vec_ptr = builder.ins().stack_addr(pointer_type, slot, 0i32);
 
     {
         let values_vec_len = builder
@@ -475,7 +474,7 @@ fn load_values_from_array(
             ir_ty,
             flags,
             values_vec_ptr,
-            i32::try_from(i * value_size).unwrap(),
+            i32::try_from(i.wrapping_mul(value_size)).unwrap(),
         );
         results.push(val);
     }
@@ -508,7 +507,7 @@ fn store_values_to_array(
             flags,
             val,
             values_vec_ptr,
-            i32::try_from(i * value_size).unwrap(),
+            i32::try_from(i.wrapping_mul(value_size)).unwrap(),
         );
     }
 }
@@ -539,7 +538,7 @@ fn debug_assert_vmctx_kind(
             ir::types::I32,
             MemFlags::trusted().with_endianness(isa.endianness()),
             vmctx,
-            0,
+            0i32,
         );
         let is_expected_vmctx = builder.ins().icmp_imm(
             ir::condcodes::IntCC::Equal,

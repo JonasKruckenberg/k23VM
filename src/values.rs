@@ -49,26 +49,31 @@ impl Val {
 
     /// Convenience method to convert this [`Val`] into a [`ValRaw`].
     ///
-    /// # Unsafety
+    /// # Safety
     ///
-    /// This method is unsafe for the reasons that [`ExternRef::to_raw`] and
-    /// [`Func::to_raw`] are unsafe.
-    pub unsafe fn as_vmval(&self, store: &mut Store) -> crate::Result<VMVal> {
+    /// Returned reference are essentially raw pointers and live only as long as
+    /// the store does. It should be used with care.
+    pub unsafe fn as_vmval(&self, store: &mut Store) -> VMVal {
         match self {
-            Val::I32(i) => Ok(VMVal::i32(*i)),
-            Val::I64(i) => Ok(VMVal::i64(*i)),
-            Val::F32(u) => Ok(VMVal::f32(*u)),
-            Val::F64(u) => Ok(VMVal::f64(*u)),
-            Val::V128(b) => Ok(VMVal::v128(*b)),
-            Val::FuncRef(f) => Ok(VMVal::funcref(match f {
-                Some(f) => f.to_raw(store),
+            Val::I32(i) => VMVal::i32(*i),
+            Val::I64(i) => VMVal::i64(*i),
+            Val::F32(u) => VMVal::f32(*u),
+            Val::F64(u) => VMVal::f64(*u),
+            Val::V128(b) => VMVal::v128(*b),
+            Val::FuncRef(f) => VMVal::funcref(match f {
+                Some(f) => f.as_raw(store),
                 None => ptr::null_mut(),
-            })),
+            }),
         }
     }
 
     /// Convenience method to convert a [`ValRaw`] into a [`Val`].
-    pub unsafe fn from_vmval(_store: &mut Store, raw: VMVal, ty: WasmValType) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// There is no way to know the actual type of `raw` so it is the callers responsibility
+    /// to provide the correct type here.
+    pub unsafe fn from_vmval(_store: &mut Store, raw: VMVal, ty: &WasmValType) -> Self {
         match ty {
             WasmValType::I32 => Self::I32(raw.get_i32()),
             WasmValType::I64 => Self::I64(raw.get_i64()),
@@ -158,7 +163,7 @@ impl Ref {
     }
 }
 
-#[allow(irrefutable_let_patterns)] // bc we only have one enum variant rn
+#[expect(irrefutable_let_patterns, reason = "we only have one enum variant rn")]
 impl Ref {
     enum_accessors! {
         e

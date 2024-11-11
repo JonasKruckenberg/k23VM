@@ -103,11 +103,11 @@ impl ModuleTypesBuilder {
         module: &TranslatedModule,
         validator_types: wasmparser::types::TypesRef<'_>,
         rec_group_id: wasmparser::types::RecGroupId,
-    ) -> crate::Result<ModuleInternedRecGroupIndex> {
+    ) -> ModuleInternedRecGroupIndex {
         assert_eq!(validator_types.id(), self.validator_id);
 
         if let Some(interned) = self.seen_rec_groups.get(&rec_group_id) {
-            return Ok(*interned);
+            return *interned;
         }
 
         self.define_new_rec_group(module, validator_types, rec_group_id)
@@ -119,7 +119,7 @@ impl ModuleTypesBuilder {
         module: &TranslatedModule,
         validator_types: wasmparser::types::TypesRef<'_>,
         rec_group_id: wasmparser::types::RecGroupId,
-    ) -> crate::Result<ModuleInternedRecGroupIndex> {
+    ) -> ModuleInternedRecGroupIndex {
         self.start_rec_group(
             validator_types,
             validator_types.rec_group_elements(rec_group_id),
@@ -133,10 +133,15 @@ impl ModuleTypesBuilder {
             self.wasm_sub_type_in_rec_group(id, wasm_ty);
         }
 
-        Ok(self.end_rec_group(rec_group_id))
+        self.end_rec_group(rec_group_id)
     }
 
     /// Start defining a new recursion group.
+    // TODO audit index arithmetic and make overflow behavior explicit
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "canonicalization involves a bunch of raw index arithmetic, which *should* never overflow."
+    )]
     fn start_rec_group(
         &mut self,
         validator_types: wasmparser::types::TypesRef<'_>,

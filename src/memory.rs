@@ -23,7 +23,7 @@ impl Memory {
         Self(store.push_memory(export))
     }
 
-    pub(crate) fn comes_from_same_store(&self, store: &Store) -> bool {
+    pub(crate) fn comes_from_same_store(self, store: &Store) -> bool {
         store.has_memory(self.0)
     }
 }

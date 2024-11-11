@@ -7,6 +7,7 @@ use crate::indices::DefinedFuncIndex;
 use crate::translate::{
     FunctionBodyData, ModuleTranslation, ModuleTypes, TranslatedModule, WasmFuncType,
 };
+use crate::trap::Trap;
 use crate::Engine;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -17,7 +18,6 @@ use compile_key::CompileKey;
 pub use compiled_function::CompiledFunction;
 use cranelift_codegen::control::ControlPlane;
 use cranelift_entity::{EntitySet, PrimaryMap};
-use crate::trap::Trap;
 
 /// Namespace corresponding to wasm functions, the index is the index of the
 /// defined function that's being referenced.
@@ -253,16 +253,24 @@ pub struct UnlinkedCompileOutputs {
 }
 
 impl UnlinkedCompileOutputs {
+    #[expect(
+        clippy::type_complexity,
+        reason = "TODO clean up the return type and remove this"
+    )]
     pub fn link_and_finish(
         mut self,
         engine: &Engine,
         module: &TranslatedModule,
-    ) -> crate::Result<(Vec<u8>, PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo>, (Vec<u32>, Vec<Trap>))> {
+    ) -> (
+        Vec<u8>,
+        PrimaryMap<DefinedFuncIndex, CompiledFunctionInfo>,
+        (Vec<u32>, Vec<Trap>),
+    ) {
         let mut text_builder = engine.compiler().text_section_builder(self.outputs.len());
         let mut ctrl_plane = ControlPlane::default();
-        let mut locs = Vec::new(); // TODO capacity
+        let mut locs = Vec::new(); // TODO get a capacity value for this
         let mut traps = TrapsBuilder::default();
-        
+
         for output in &self.outputs {
             let body = output.function.buffer();
             let alignment = output.function.alignment();
@@ -285,19 +293,19 @@ impl UnlinkedCompileOutputs {
 
                 // Ensure that we actually resolved the relocation
                 debug_assert!(text_builder.resolve_reloc(
-                    off + u64::from(r.offset),
+                    off.checked_add(u64::from(r.offset)).unwrap(),
                     r.kind,
                     r.addend,
                     target
                 ));
             }
-            
+
             let loc = FunctionLoc {
                 start: u32::try_from(off).unwrap(),
                 length: u32::try_from(body_len).unwrap(),
             };
-            
-            traps.push_traps(&loc, output.function.traps());
+
+            traps.push_traps(loc, output.function.traps());
             locs.push(loc);
         }
 
@@ -328,9 +336,7 @@ impl UnlinkedCompileOutputs {
             })
             .collect();
 
-        
-
-        Ok((text_builder.finish(&mut ctrl_plane), funcs, traps.finish()))
+        (text_builder.finish(&mut ctrl_plane), funcs, traps.finish())
     }
 }
 
@@ -342,25 +348,27 @@ struct TrapsBuilder {
 }
 
 impl TrapsBuilder {
-    pub fn push_traps(&mut self, func: &FunctionLoc, traps: impl ExactSizeIterator<Item = TrapInfo>) {
-        let func_start = u32::try_from(func.start).unwrap();
-        
+    pub fn push_traps(
+        &mut self,
+        func: FunctionLoc,
+        traps: impl ExactSizeIterator<Item = TrapInfo>,
+    ) {
         self.offsets.reserve_exact(traps.len());
         self.traps.reserve_exact(traps.len());
-        
+
         for trap in traps {
-            let pos = func_start + trap.offset;
+            let pos = func.start.checked_add(trap.offset).unwrap();
             debug_assert!(pos >= self.last_offset);
-            // sanity check to make sure everything is sorted. 
+            // sanity check to make sure everything is sorted.
             // otherwise we won't be able to use lookup later.
             self.offsets.push(pos);
             self.traps.push(trap.trap);
             self.last_offset = pos;
         }
-        
-        self.last_offset = u32::try_from(func.start + func.length).unwrap();
+
+        self.last_offset = func.start.checked_add(func.length).unwrap();
     }
-    
+
     pub fn finish(self) -> (Vec<u32>, Vec<Trap>) {
         (self.offsets, self.traps)
     }

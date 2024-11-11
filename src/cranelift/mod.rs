@@ -18,7 +18,7 @@ use cranelift_frontend::FunctionBuilder;
 /// The value of a WebAssembly global variable.
 #[derive(Clone, Copy)]
 pub(crate) enum CraneliftGlobal {
-    /// This is a constant global with a value known at compile_cranelift time.
+    /// This is a constant global with a value known at compile time.
     Const(ir::Value),
     /// This is a variable in memory that should be referenced through a `GlobalValue`.
     Memory {
@@ -81,7 +81,7 @@ impl CraneliftTable {
                 .ins()
                 .ishl_imm(index, i64::from(self.element_size.trailing_zeros()))
         } else {
-            builder.ins().imul_imm(index, self.element_size as i64)
+            builder.ins().imul_imm(index, i64::from(self.element_size))
         };
         // add both together to get the element address
         let element_addr = builder.ins().iadd(base, offset);

@@ -7,6 +7,7 @@ use core::ptr;
 mod backtrace;
 
 pub fn raise_trap(reason: TrapReason) {
+    // Safety: TLS storage is always initialized
     let state = unsafe { &*TLS.get().unwrap() };
     state.unwind_with(UnwindReason::Trap(reason))
 }
@@ -20,9 +21,10 @@ where
     F: FnMut(*mut VMContext),
 {
     let result = CallThreadState::new(caller, vmctx_plan).with(|state| {
+        // Safety: call to extern
         let r = unsafe { crate::placeholder::setjmp::setjmp(state.jmp_buf.as_ptr().cast()) };
-        if r == 0 {
-            closure(caller)
+        if r == 0i32 {
+            closure(caller);
         }
         r
     });
@@ -61,9 +63,7 @@ pub enum TrapReason {
         /// Note that wasm loads/stores are not guaranteed to fill in this
         /// information. Dynamically-bounds-checked memories, for example, will
         /// not access an invalid address but may instead load from NULL or may
-        /// explicitly jump to a `ud2` instruction. This is only available for
-        /// fault-based trap_handling which are one of the main ways, but not the only
-        /// way, to run wasm.
+        /// explicitly jump to a `ud2` instruction.
         faulting_addr: Option<usize>,
         /// The trap code associated with this trap.
         trap: crate::trap::Trap,
@@ -85,14 +85,14 @@ pub struct CallThreadState {
     offsets: StaticVMOffsets,
     vmctx: *mut VMContext,
     prev: Cell<*const CallThreadState>,
-    // The values of `VMRuntimeLimits::last_wasm_{exit_{pc,fp},entry_sp}`
-    // for the *previous* `CallThreadState` for this same store/limits. Our
-    // *current* last wasm PC/FP/SP are saved in `self.limits`. We save a
-    // copy of the old registers here because the `VMRuntimeLimits`
-    // typically doesn't change across nested calls into Wasm (i.e. they are
-    // typically calls back into the same store and `self.limits ==
-    // self.prev.limits`) and we must to maintain the list of
-    // contiguous-Wasm-frames stack regions for backtracing purposes.
+    /// The values of `VMRuntimeLimits::last_wasm_{exit_{pc,fp},entry_sp}`
+    /// for the *previous* `CallThreadState` for this same store/limits. Our
+    /// *current* last wasm PC/FP/SP are saved in `self.limits`. We save a
+    /// copy of the old registers here because the `VMContext` fields
+    /// typically don't change across nested calls into Wasm (i.e. they are
+    /// typically calls back into the same store and `self.limits ==
+    /// self.prev.limits`) and we must to maintain the list of
+    /// contiguous-Wasm-frames stack regions for backtracing purposes.
     old_last_wasm_exit_fp: Cell<usize>,
     old_last_wasm_exit_pc: Cell<usize>,
     old_last_wasm_entry_fp: Cell<usize>,
@@ -100,27 +100,31 @@ pub struct CallThreadState {
 
 impl CallThreadState {
     pub fn new(vmctx: *mut VMContext, vmoffsets: StaticVMOffsets) -> Self {
-        Self {
-            unwind: UnsafeCell::new(MaybeUninit::uninit()),
-            jmp_buf: Cell::new(crate::placeholder::setjmp::jmp_buf::from([0; 48])),
-            vmctx,
-            prev: Cell::new(ptr::null()),
-            old_last_wasm_exit_fp: Cell::new(unsafe {
-                *vmctx
-                    .byte_add(vmoffsets.vmctx_last_wasm_exit_fp() as usize)
-                    .cast::<usize>()
-            }),
-            old_last_wasm_exit_pc: Cell::new(unsafe {
-                *vmctx
-                    .byte_add(vmoffsets.vmctx_last_wasm_exit_pc() as usize)
-                    .cast::<usize>()
-            }),
-            old_last_wasm_entry_fp: Cell::new(unsafe {
-                *vmctx
-                    .byte_add(vmoffsets.vmctx_last_wasm_entry_fp() as usize)
-                    .cast::<usize>()
-            }),
-            offsets: vmoffsets,
+        // Safety: the offsets below are small so the code *should* not overflow
+        // TODO this is horrific
+        unsafe {
+            Self {
+                unwind: UnsafeCell::new(MaybeUninit::uninit()),
+                jmp_buf: Cell::new(crate::placeholder::setjmp::jmp_buf::from([0; 48])),
+                vmctx,
+                prev: Cell::new(ptr::null()),
+                old_last_wasm_exit_fp: Cell::new(
+                    *vmctx
+                        .byte_add(vmoffsets.vmctx_last_wasm_exit_fp() as usize)
+                        .cast::<usize>(),
+                ),
+                old_last_wasm_exit_pc: Cell::new(
+                    *vmctx
+                        .byte_add(vmoffsets.vmctx_last_wasm_exit_pc() as usize)
+                        .cast::<usize>(),
+                ),
+                old_last_wasm_entry_fp: Cell::new(
+                    *vmctx
+                        .byte_add(vmoffsets.vmctx_last_wasm_entry_fp() as usize)
+                        .cast::<usize>(),
+                ),
+                offsets: vmoffsets,
+            }
         }
     }
 
@@ -135,13 +139,11 @@ impl CallThreadState {
         impl Drop for Reset<'_> {
             #[inline]
             fn drop(&mut self) {
-                unsafe {
-                    self.state.pop();
-                }
+                self.state.pop();
             }
         }
 
-        let ret = unsafe {
+        let ret = {
             self.push();
             let reset = Reset { state: &self };
             closure(reset.state)
@@ -150,6 +152,7 @@ impl CallThreadState {
         if ret == 0 {
             Ok(())
         } else {
+            // Safety: a non-null ret code means the implementation has also written to the `unwind` field.
             Err(unsafe { self.read_unwind() })
         }
     }
@@ -160,36 +163,41 @@ impl CallThreadState {
     }
 
     fn unwind_with(&self, reason: UnwindReason) -> ! {
+        let backtrace = match reason {
+            // Safety: since we pass None to `new_with_trap_state`, pc and fp will be read from the
+            // `VMContext` instead. We have to trust that those are valid.
+            UnwindReason::Trap(_) => unsafe { Some(Backtrace::new_with_trap_state(self, None)) },
+            // UnwindReason::Panic(_) => None,
+        };
+
+        // Safety: `MaybeUninit` ensures proper alignment.
         unsafe {
-            let backtrace = match reason {
-                // UnwindReason::Panic(_) => None,
-                UnwindReason::Trap(_) => Some(Backtrace::new_with_trap_state(self, None)),
-            };
-
             (*self.unwind.get()).as_mut_ptr().write((reason, backtrace));
+        }
 
+        // Safety: call to extern
+        unsafe {
             crate::placeholder::setjmp::longjmp(self.jmp_buf.as_ptr().cast(), 1);
         }
     }
 
-    pub(crate) fn set_jit_trap(
+    pub(crate) unsafe fn set_jit_trap(
         &self,
         pc: usize,
         fp: usize,
         faulting_addr: Option<usize>,
         trap: crate::trap::Trap,
     ) {
-        let backtrace = unsafe { Backtrace::new_with_trap_state(self, Some((pc, fp))) };
-        unsafe {
-            (*self.unwind.get()).as_mut_ptr().write((
-                UnwindReason::Trap(TrapReason::Jit {
-                    pc,
-                    faulting_addr,
-                    trap,
-                }),
-                Some(backtrace),
-            ));
-        }
+        let backtrace = Backtrace::new_with_trap_state(self, Some((pc, fp)));
+        // Safety: `MaybeUninit` ensures proper alignment.
+        (*self.unwind.get()).as_mut_ptr().write((
+            UnwindReason::Trap(TrapReason::Jit {
+                pc,
+                faulting_addr,
+                trap,
+            }),
+            Some(backtrace),
+        ));
     }
 
     /// Get the previous `CallThreadState`.
@@ -198,25 +206,27 @@ impl CallThreadState {
     }
 
     #[inline]
-    pub(crate) unsafe fn push(&self) {
+    pub(crate) fn push(&self) {
         assert!(self.prev.get().is_null());
         self.prev.set(
-            TLS.replace(Some(self as *const _))
+            TLS.replace(Some(ptr::from_ref(self)))
                 .unwrap_or(ptr::null_mut()),
-        )
+        );
     }
 
     #[inline]
-    pub(crate) unsafe fn pop(&self) {
+    pub(crate) fn pop(&self) {
         let prev = self.prev.replace(ptr::null());
         let head = TLS.replace(Some(prev)).unwrap_or(ptr::null_mut());
         assert!(ptr::eq(head, self));
     }
 
-    pub(crate) fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Self> + 'a {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Self> {
         let mut state = Some(self);
         core::iter::from_fn(move || {
             let this = state?;
+            // Safety: `prev` is always either a null ptr (indicating the end of the list) or a valid pointer to a `CallThreadState`.
+            // This is ensured by the `push` method.
             state = unsafe { this.prev().as_ref() };
             Some(this)
         })
@@ -225,6 +235,8 @@ impl CallThreadState {
 
 impl Drop for CallThreadState {
     fn drop(&mut self) {
+        // Safety: offsets are small so the code below *should* overflow
+        // FIXME this is horrific
         unsafe {
             *self
                 .vmctx

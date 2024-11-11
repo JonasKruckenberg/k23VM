@@ -532,14 +532,14 @@ impl fmt::Display for WasmFuncType {
         write!(f, "(func")?;
         if !self.params.is_empty() {
             write!(f, " (param")?;
-            for p in self.params.iter() {
+            for p in &self.params {
                 write!(f, " {p}")?;
             }
             write!(f, ")")?;
         }
         if !self.results.is_empty() {
             write!(f, " (result")?;
-            for r in self.results.iter() {
+            for r in &self.results {
                 write!(f, " {r}")?;
             }
             write!(f, ")")?;
@@ -553,10 +553,10 @@ impl TypeTrace for WasmFuncType {
     where
         F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
     {
-        for ty in self.params.iter() {
+        for ty in &self.params {
             ty.trace(func)?;
         }
-        for ty in self.results.iter() {
+        for ty in &self.results {
             ty.trace(func)?;
         }
         Ok(())
@@ -566,10 +566,10 @@ impl TypeTrace for WasmFuncType {
     where
         F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
     {
-        for ty in self.params.iter_mut() {
+        for ty in &mut self.params {
             ty.trace_mut(func)?;
         }
-        for ty in self.results.iter_mut() {
+        for ty in &mut self.results {
             ty.trace_mut(func)?;
         }
         Ok(())
@@ -611,7 +611,7 @@ pub struct WasmStructType {
 impl fmt::Display for WasmStructType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(struct")?;
-        for ty in self.fields.iter() {
+        for ty in &self.fields {
             write!(f, " {ty}")?;
         }
         write!(f, ")")
@@ -623,7 +623,7 @@ impl TypeTrace for WasmStructType {
     where
         F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
     {
-        for field in self.fields.iter() {
+        for field in &self.fields {
             field.trace(func)?;
         }
         Ok(())
@@ -633,7 +633,7 @@ impl TypeTrace for WasmStructType {
     where
         F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
     {
-        for field in self.fields.iter_mut() {
+        for field in &mut self.fields {
             field.trace_mut(func)?;
         }
         Ok(())
@@ -736,7 +736,7 @@ impl TypeTrace for WasmRecGroup {
     where
         F: FnMut(CanonicalizedTypeIndex) -> Result<(), E>,
     {
-        for ty in self.0.iter() {
+        for ty in &self.0 {
             ty.trace(func)?;
         }
         Ok(())
@@ -746,7 +746,7 @@ impl TypeTrace for WasmRecGroup {
     where
         F: FnMut(&mut CanonicalizedTypeIndex) -> Result<(), E>,
     {
-        for ty in self.0.iter_mut() {
+        for ty in &mut self.0 {
             ty.trace_mut(func)?;
         }
         Ok(())

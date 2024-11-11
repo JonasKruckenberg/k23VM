@@ -16,7 +16,12 @@ pub struct Func(Stored<runtime::ExportedFunction>);
 
 impl Func {
     /// Returns the type of this function.
-    pub fn ty<'s>(&self, store: &'s Store) -> FuncType {
+    ///
+    /// # Panics
+    ///
+    /// TODO
+    pub fn ty(&self, store: &Store) -> FuncType {
+        // Safety: at this point `VMContext` is initialized, so accessing its fields is safe
         let func_ref = unsafe { store[self.0].func_ref.as_ref() };
         let ty = store
             .engine
@@ -29,7 +34,11 @@ impl Func {
     /// Calls the given function with the provided arguments and places the results in the provided
     /// results slice.
     ///
-    /// # Unsafety
+    /// # Errors
+    ///
+    /// TODO
+    ///
+    /// # Safety
     ///
     /// It is up to the caller to ensure the provided arguments are of the correct types and that
     /// the `results` slice has enough space to hold the results of the function.
@@ -49,8 +58,8 @@ impl Func {
 
         // copy the arguments into the storage
         values_vec.resize_with(values_vec_size, || VMVal::v128(0));
-        for (arg, slot) in params.iter().cloned().zip(&mut values_vec) {
-            *slot = arg.as_vmval(store)?;
+        for (arg, slot) in params.iter().copied().zip(&mut values_vec) {
+            *slot = arg.as_vmval(store);
         }
 
         // do the actual call
@@ -58,8 +67,8 @@ impl Func {
 
         // copy the results out of the storage
         for ((i, slot), vmval) in results.iter_mut().enumerate().zip(&values_vec) {
-            let ty = ty.results[i].clone();
-            *slot = unsafe { Val::from_vmval(store, *vmval, ty) };
+            let ty = &ty.results[i];
+            *slot = Val::from_vmval(store, *vmval, ty);
         }
 
         // clean up and return the argument storage
@@ -80,7 +89,8 @@ impl Func {
         let module = store[store.get_instance_from_vmctx(vmctx)].module();
 
         let _guard = enter_wasm(vmctx, &module.offsets().static_);
-        
+
+        // Safety: this does syscalls
         unsafe { placeholder::signals::ensure_signal_handlers_are_registered() }
 
         let res = placeholder::trap_handling::catch_traps(
@@ -110,11 +120,12 @@ impl Func {
         Ok(())
     }
 
-    pub(crate) fn to_raw(&self, store: &mut Store) -> *mut c_void {
+    pub(crate) unsafe fn as_raw(&self, store: &mut Store) -> *mut c_void {
         store[self.0].func_ref.as_ptr().cast()
     }
 
     pub(crate) fn as_vmfunction_import(&self, store: &Store) -> VMFunctionImport {
+        // Safety: at this point `VMContext` is initialized, so accessing its fields is safe
         let func_ref = unsafe { store[self.0].func_ref.as_ref() };
         VMFunctionImport {
             wasm_call: func_ref.wasm_call,
@@ -130,7 +141,9 @@ impl Func {
 
 fn enter_wasm(vmctx: *mut VMContext, offsets: &StaticVMOffsets) -> WasmExecutionGuard {
     let stack_pointer = placeholder::arch::get_stack_pointer();
-    let wasm_stack_limit = stack_pointer - MAX_WASM_STACK;
+    let wasm_stack_limit = stack_pointer.checked_sub(MAX_WASM_STACK).unwrap();
+
+    // Safety: at this point the `VMContext` is initialized and accessing its fields is safe.
     unsafe {
         let stack_limit_ptr = vmctx
             .byte_add(offsets.vmctx_stack_limit() as usize)
@@ -150,6 +163,7 @@ struct WasmExecutionGuard {
 
 impl Drop for WasmExecutionGuard {
     fn drop(&mut self) {
+        // Safety: this relies on `enter_wasm` correctly calculating the stack limit pointer.
         unsafe {
             *self.stack_limit_ptr = self.prev_stack;
         }

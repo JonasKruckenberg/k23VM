@@ -16,7 +16,7 @@ impl ConstExpr {
     /// Returns the new const expression as well as the escaping function
     /// indices that appeared in `ref.func` instructions, if any.
     pub fn from_wasmparser(
-        expr: wasmparser::ConstExpr<'_>,
+        expr: &wasmparser::ConstExpr<'_>,
     ) -> crate::Result<(Self, SmallVec<[FuncIndex; 1]>)> {
         let mut iter = expr
             .get_operators_reader()

@@ -1,14 +1,21 @@
 pub mod arch;
+pub mod code_registry;
 pub mod instance_allocator;
 pub mod mmap;
 mod setjmp;
 pub(crate) mod signals;
-pub mod code_registry;
 pub mod trap_handling;
 
-use std::convert::TryInto;
+use core::num::NonZero;
 
 /// Returns the host page size in bytes.
-pub fn host_page_size() -> usize {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE).try_into().unwrap() }
+pub fn host_page_size() -> NonZero<usize> {
+    // Safety: syscall
+    unsafe {
+        NonZero::new(
+            usize::try_from(libc::sysconf(libc::_SC_PAGESIZE))
+                .expect("host page size too big for usize"),
+        )
+        .expect("host page size is zero")
+    }
 }
