@@ -185,7 +185,7 @@ fn declare_locals(
             builder.set_val_label(init, ValueLabel::new(*next_local));
         }
         // This is checked by validation to not overflow
-        *next_local += *next_local + 1;
+        *next_local += 1;
     }
 }
 
