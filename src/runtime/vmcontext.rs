@@ -343,8 +343,9 @@ pub struct VMMemoryDefinition {
     pub current_length: AtomicUsize,
 }
 
+// TODO Pack the globals more densely, rather than using the same size for all of types.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, align(16))]
 pub struct VMGlobalDefinition {
     data: [u8; 16],
 }
