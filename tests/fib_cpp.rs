@@ -1,4 +1,4 @@
-use k23_vm::{ConstExprEvaluator, Engine, Linker, Module, PlaceholderAllocatorDontUse, Store};
+use k23vm::{ConstExprEvaluator, Engine, Linker, Module, PlaceholderAllocatorDontUse, Store};
 use wasmparser::Validator;
 
 #[test_log::test]

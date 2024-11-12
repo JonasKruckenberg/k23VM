@@ -580,7 +580,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "k23-vm"
+name = "k23vm"
 version = "0.1.0"
 dependencies = [
  "anyhow",

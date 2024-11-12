@@ -1,4 +1,4 @@
-use k23_vm::{Engine, Module};
+use k23vm::{Engine, Module};
 use wasmparser::Validator;
 
 #[test_log::test]

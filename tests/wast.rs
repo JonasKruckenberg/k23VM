@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context};
-use k23_vm::{
+use k23vm::{
     ConstExprEvaluator, Engine, Extern, Instance, InstanceAllocator, Linker, Module,
     PlaceholderAllocatorDontUse, Store, Val,
 };
