@@ -7,5 +7,5 @@ pub fn main() {
     let mut validator = Validator::new();
 
     let _module =
-        Module::from_wat(&engine, &mut validator, include_str!("./kiwi-editor.wat")).unwrap();
+        Module::from_str(&engine, &mut validator, include_str!("./kiwi-editor.wat")).unwrap();
 }

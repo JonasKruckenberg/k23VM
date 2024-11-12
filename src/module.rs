@@ -37,7 +37,7 @@ impl Module {
     /// # Errors
     ///
     /// Returns an error if the WebAssembly text file is malformed, or compilation fails.
-    pub fn from_wat(engine: &Engine, validator: &mut Validator, str: &str) -> crate::Result<Self> {
+    pub fn from_str(engine: &Engine, validator: &mut Validator, str: &str) -> crate::Result<Self> {
         let bytes = wat::parse_str(str)?;
         Self::from_bytes(engine, validator, &bytes)
     }

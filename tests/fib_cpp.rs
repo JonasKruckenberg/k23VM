@@ -12,7 +12,7 @@ fn main() {
     // instantiate & define the fib_cpp module
     {
         let module =
-            Module::from_wat(&engine, &mut validator, include_str!("./fib_cpp.wat")).unwrap();
+            Module::from_str(&engine, &mut validator, include_str!("./fib_cpp.wat")).unwrap();
 
         let instance = linker
             .instantiate(
@@ -32,7 +32,7 @@ fn main() {
     // instantiate the test module
     {
         let module =
-            Module::from_wat(&engine, &mut validator, include_str!("./fib_test.wat")).unwrap();
+            Module::from_str(&engine, &mut validator, include_str!("./fib_test.wat")).unwrap();
 
         let instance = linker
             .instantiate(
