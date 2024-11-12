@@ -3,7 +3,7 @@
     <code>k23VM</code>
   </h1>
   <p>
-    <strong>k23 WASM runtime WIP</strong>
+    <strong>k23 WASM runtime</strong>
   </p>
 </div>
 
