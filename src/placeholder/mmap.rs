@@ -1,3 +1,7 @@
+//! A type that "owns" a specific memory mapped region and exposes methods for managing its
+//! permissions (read-only, read-write, executable). Also acts as a RAII guard for the region,
+//! unmapping it on drop.
+
 use crate::placeholder::host_page_size;
 use crate::utils::usize_is_multiple_of_host_page_size;
 use crate::Error;

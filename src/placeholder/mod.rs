@@ -1,3 +1,7 @@
+//! Placeholder functionality for initial bootstrapping. This module will be replaced by k23-specific
+//! code in the future. AS such, documentation is barebones, riddled with TODOs and probably only works
+//! on macOS right now.
+
 pub mod arch;
 pub mod code_registry;
 pub mod instance_allocator;

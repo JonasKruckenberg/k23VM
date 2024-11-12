@@ -1,3 +1,6 @@
+//! Architecture specific functionality. Only uses are obtaining the host stack pointer before entering
+//! WASM and frame traversal utilities for backtracing.
+
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "aarch64")] {
         #[inline]

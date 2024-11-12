@@ -1,3 +1,24 @@
+//! Signals based trap handling for WASM.
+//!
+//! For performance reasons, JIT compiled WASM code uses hardware faults for WASM traps. Explicit traps
+//! get translated into jumps to invalid instructions (each invalid instructions text offset corresponds to a trap code)
+//! while other traps such as accessing out of bounds memory are handled through the "regular" page fault
+//! mechanism.
+//! But at the end of the day, all traps manifest as signals and this module is concerned with catching them.
+//!
+//! The code might look intimidating, but is in reality quite simple. Here's the cliff notes:
+//! - We register signal handlers for SIGSEV, SIGBUS, SIGILL, and SIGFPE with the handler function `trap_handler`.
+//! - Inside `trap_handler` we first access `CallThreadState` which holds thread-local data required
+//!     for trap handling (such as the VMContext ptr, and the jmp_buf for longjumping) it is also the
+//!     place we store trap details into.
+//! - Use `CallThreadState` and the signals PC & FP to determine the originating WASM module, and the associated trap code.
+//! - Save the trap code, captured backtrace and other info in the `CallThreadState` TLS storage.
+//! - `longjmp` back to the `catch_traps` function
+//! - inside `catch_traps` read the unwind info from `CallThreadState` and turn it into a nice `Error`
+//!
+//! This placeholder implementation is pretty much copied from wasmtime, so if you want to see the proper
+//! implementation see [their repo](https://github.com/bytecodealliance/wasmtime/blob/f406347a6e8af835f52bfb6868a64f01be2ee533/crates/wasmtime/src/runtime/vm/sys/unix/signals.rs)
+
 #![expect(static_mut_refs, reason = "signal handlers are static mut")]
 
 use crate::placeholder::code_registry;
@@ -116,6 +137,35 @@ unsafe extern "C" fn trap_handler(
 
         info.set_jit_trap(pc, fp, faulting_addr, trap);
 
+        // On macOS this is a bit special, unfortunately. If we were to
+        // `siglongjmp` out of the signal handler that notably does
+        // *not* reset the sigaltstack state of our signal handler. This
+        // seems to trick the kernel into thinking that the sigaltstack
+        // is still in use upon delivery of the next signal, meaning
+        // that the sigaltstack is not ever used again if we immediately
+        // call `wasmtime_longjmp` here.
+        //
+        // Note that if we use `longjmp` instead of `siglongjmp` then
+        // the problem is fixed. The problem with that, however, is that
+        // `setjmp` is much slower than `sigsetjmp` due to the
+        // preservation of the process's signal mask. The reason
+        // `longjmp` appears to work is that it seems to call a function
+        // (according to published macOS sources) called
+        // `_sigunaltstack` which updates the kernel to say the
+        // sigaltstack is no longer in use. We ideally want to call that
+        // here but I don't think there's a stable way for us to call
+        // that.
+        //
+        // Given all that, on macOS only, we do the next best thing. We
+        // return from the signal handler after updating the register
+        // context. This will cause control to return to our shim
+        // function defined here which will perform the
+        // `wasmtime_longjmp` (`siglongjmp`) for us. The reason this
+        // works is that by returning from the signal handler we'll
+        // trigger all the normal machinery for "the signal handler is
+        // done running" which will clear the sigaltstack flag and allow
+        // reusing it for the next signal. Then upon resuming in our custom
+        // code we blow away the stack anyway with a longjmp.
         if cfg!(target_os = "macos") {
             unsafe extern "C" fn wasmtime_longjmp_shim(jmp_buf: *const u8) {
                 crate::placeholder::setjmp::longjmp(jmp_buf.cast_mut().cast(), 1)
