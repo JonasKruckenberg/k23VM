@@ -1,4 +1,13 @@
-# k23VM
+<div align="center">
+  <h1>
+    <code>k23VM</code>
+  </h1>
+  <p>
+    <strong>k23 WASM runtime WIP</strong>
+  </p>
+</div>
+
+This repository contains the work-in-progress version of k23's new WASM runtime: `k23VM`.
 
 The VM design currently follows wasmtime's implementation pretty closely (it is the de-facto standard implementation for
 WASM outside the browser and an awesome piece of software) with a few minor differences. It is expected that both will
