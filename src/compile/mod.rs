@@ -203,7 +203,7 @@ fn compile_required_builtin_trampolines(
     let mut builtins = EntitySet::new();
     let mut new_jobs: Vec<CompileInput<'_>> = Vec::new();
 
-    let builtin_indicies = outputs
+    let builtin_indices = outputs
         .iter()
         .flat_map(|output| output.function.relocations())
         .filter_map(|reloc| match reloc.target {
@@ -223,7 +223,7 @@ fn compile_required_builtin_trampolines(
         })
     };
 
-    for index in builtin_indicies {
+    for index in builtin_indices {
         if builtins.insert(index) {
             new_jobs.push(compile_builtin(index));
         }

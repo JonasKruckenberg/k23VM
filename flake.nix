@@ -28,12 +28,12 @@
                         # compilers
                         rustToolchain
                         clang
-                        cmake
 
                         # devtools
                         wabt
                         binaryen
                         trunk
+                        typos
                     ];
                     buildInputs = [
                         # misc. libraries

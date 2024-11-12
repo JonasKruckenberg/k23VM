@@ -1,0 +1,6 @@
+[default.extend-words]
+alow = "alow" # used in code_translator.rs
+alo = "alo" # used in code_translator.rs
+
+[files]
+extend-exclude = ["target", "**/*.wast", "**/*.wat"]

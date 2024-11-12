@@ -43,7 +43,7 @@ pub enum Error {
     Gimli(gimli::Error),
     /// Failed to parse a wat file.
     Wat(wat::Error),
-    /// A WebAssembly trap ocurred.
+    /// A WebAssembly trap occurred.
     Trap {
         /// The trap that occurred.
         trap: Trap,
